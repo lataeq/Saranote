@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data
+data/raw/
+data/processed/
+data/external/
+
+# Outputs
+outputs/
+runs/
+logs/
+*.log
+
+# Model artifacts
+checkpoints/
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+
+# Audio artifacts
+*.wav
+*.mp3
+*.flac
+*.m4a
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

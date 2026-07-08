@@ -1,0 +1,9 @@
+datasets
+soundfile
+librosa
+pandas
+numpy
+matplotlib
+ipykernel
+torchcodec
+
