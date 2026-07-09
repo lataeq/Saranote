@@ -3,11 +3,37 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 
+COMMON_ASR_REPLACEMENTS = {
+    "ฟาย": "ฝ่าย",
+    "ฝาย": "ฝ่าย",
+    "ดำเนื้องาน": "ดำเนินงาน",
+    "งุบประมาณ": "งบประมาณ",
+    "นกประมาณ": "งบประมาณ",
+    "แผ่นงบประมาณ": "แผนงบประมาณ",
+    "รถค่าใช้จ่าย": "ลดค่าใช้จ่าย",
+    "ชะบับ": "ฉบับ",
+    "ชบับ": "ฉบับ",
+    "แก้ไข่": "แก้ไข",
+    "ไพ้ใน": "ภายใน",
+    "พายใน": "ภายใน",
+    "วันสุข": "วันศุกร์",
+    "ความเสียง": "ความเสี่ยง",
+    "หลวดสอบ": "ตรวจสอบ",
+    "รวดสอบ": "ตรวจสอบ",
+}
+
+
 def clean_transcript_text(text: str, max_token_repeats: int = 2) -> str:
     if not isinstance(text, str):
         return ""
     if max_token_repeats < 1:
         raise ValueError("max_token_repeats must be at least 1")
+
+    text = text.replace("\u0e4d\u0e32", "\u0e33")
+
+    # ponytail: tiny demo glossary; replace with real spell correction if ASR cleanup grows.
+    for wrong, correct in COMMON_ASR_REPLACEMENTS.items():
+        text = text.replace(wrong, correct)
 
     tokens = re.sub(r"\s+", " ", text).strip().split(" ")
     cleaned_tokens: list[str] = []
@@ -51,9 +77,14 @@ def clean_transcript_rows(
 if __name__ == "__main__":
     rows = [
         {"timestamp": "00:00:00 - 00:00:05", "text": "  สวัสดี   ครับ ครับ ครับ  "},
-        {"timestamp": "00:00:05 - 00:00:10", "text": "   "},
+        {"timestamp": "00:00:05 - 00:00:10", "text": "ฝ่ายดำเนื้องานต้องส่งเอกสารงุบประมาณชะบับแก้ไขไพ้ในวันสุข"},
+        {"timestamp": "00:00:10 - 00:00:15", "text": "   "},
     ]
     assert clean_transcript_rows(rows) == [
-        {"timestamp": "00:00:00 - 00:00:05", "text": "สวัสดี ครับ ครับ"}
+        {"timestamp": "00:00:00 - 00:00:05", "text": "สวัสดี ครับ ครับ"},
+        {
+            "timestamp": "00:00:05 - 00:00:10",
+            "text": "ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์",
+        },
     ]
     print("transcript clean self-check passed")

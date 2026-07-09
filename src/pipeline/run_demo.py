@@ -1,0 +1,236 @@
+import argparse
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from src.retrieval.chunking import chunk_transcript_rows
+from src.retrieval.search import search_chunks
+from src.summarization.summarize import summarize_from_context
+from src.transcript.clean import clean_transcript_rows
+from src.transcript.segment import split_audio
+from src.transcript.timestamps import format_time_range
+
+
+DEFAULT_CONFIG = {
+    "asr_backend": "whisper",
+    "model_name": "openai/whisper-small",
+    "language": "thai",
+    "task": "transcribe",
+    "typhoon_model": "typhoon-asr-realtime",
+    "typhoon_api_base_url": "https://api.opentyphoon.ai/v1",
+    "typhoon_api_key_env": "TYPHOON_API_KEY",
+    "sample_rate": 16000,
+    "chunk_seconds": 10.0,
+    "overlap_seconds": 0.0,
+    "max_chunk_characters": 600,
+    "top_k": 3,
+    "max_summary_points": 3,
+    "silence_threshold": 0.001,
+}
+
+
+TRANSCRIPT_BREAK_WORDS = {"นอกจากนี้", "อย่างไรก็ตาม", "ถัดไป"}
+
+
+DEMO_ROWS = [
+    {"timestamp": "00:00:00 - 00:00:08", "text": "เปิดประชุม และแจ้งวาระวันนี้"},
+    {"timestamp": "00:00:08 - 00:00:18", "text": "ที่ประชุม มีมติ ให้ปรับแผน งบประมาณ สำหรับโครงการใหม่"},
+    {"timestamp": "00:00:18 - 00:00:28", "text": "ฝ่ายดำเนินงานต้องส่งเอกสารภายในวันศุกร์"},
+]
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    config = dict(DEFAULT_CONFIG)
+    if not path.exists():
+        return config
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in stripped:
+            continue
+
+        key, value = stripped.split(":", 1)
+        config[key.strip()] = _parse_config_value(value.strip())
+
+    return config
+
+
+def run_demo_from_rows(
+    rows: list[dict[str, Any]],
+    question: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    cleaned_rows = clean_transcript_rows(rows)
+    chunks = chunk_transcript_rows(cleaned_rows, max_characters=int(config["max_chunk_characters"]))
+    search_results = search_chunks(question, chunks, top_k=int(config["top_k"]))
+    retrieved_context = [result.chunk.text for result in search_results]
+    answer = summarize_from_context(question, retrieved_context, max_points=int(config["max_summary_points"]))
+
+    return {
+        "question": question,
+        "answer": answer,
+        "cleaned_rows": cleaned_rows,
+        "retrieved_context": [
+            {
+                "score": result.score,
+                "matched_terms": result.matched_terms,
+                "start_timestamp": result.chunk.start_timestamp,
+                "end_timestamp": result.chunk.end_timestamp,
+                "text": result.chunk.text,
+            }
+            for result in search_results
+        ],
+    }
+
+
+def transcribe_audio(audio_path: Path, config: dict[str, Any]) -> list[dict[str, str]]:
+    backend = str(config.get("asr_backend", "whisper"))
+    if backend == "typhoon_api":
+        return transcribe_audio_with_typhoon(audio_path, config)
+    if backend != "whisper":
+        raise SystemExit(f"Unknown ASR backend: {backend}")
+
+    return transcribe_audio_with_whisper(audio_path, config)
+
+
+def transcribe_audio_with_whisper(audio_path: Path, config: dict[str, Any]) -> list[dict[str, str]]:
+    import librosa
+    import torch
+    from transformers import pipeline
+
+    audio, sample_rate = librosa.load(audio_path, sr=int(config["sample_rate"]), mono=True)
+    peak = float(abs(audio).max()) if len(audio) else 0.0
+    if peak < float(config["silence_threshold"]):
+        raise SystemExit(
+            f"Audio appears silent (peak={peak:.6f}). Check microphone/input source and record again."
+        )
+
+    segments = split_audio(
+        audio,
+        sample_rate=sample_rate,
+        chunk_seconds=float(config["chunk_seconds"]),
+        overlap_seconds=float(config["overlap_seconds"]),
+    )
+    transcriber = pipeline(
+        "automatic-speech-recognition",
+        model=str(config["model_name"]),
+        device=0 if torch.cuda.is_available() else -1,
+        dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+    )
+
+    rows = []
+    generation_kwargs = {
+        key: config[key]
+        for key in ("language", "task")
+        if config.get(key)
+    }
+    for segment in segments:
+        prediction = transcriber({"array": segment.audio, "sampling_rate": sample_rate}, **generation_kwargs)
+        text = prediction["text"] if isinstance(prediction, dict) else str(prediction)
+        rows.append({"timestamp": format_time_range(segment.start_seconds, segment.end_seconds), "text": text})
+
+    return rows
+
+
+def transcribe_audio_with_typhoon(audio_path: Path, config: dict[str, Any]) -> list[dict[str, str]]:
+    import httpx
+
+    api_key_env = str(config["typhoon_api_key_env"])
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise SystemExit(f"Set {api_key_env} before using asr_backend=typhoon_api.")
+
+    base_url = str(config["typhoon_api_base_url"]).rstrip("/")
+    with audio_path.open("rb") as audio_file:
+        response = httpx.post(
+            f"{base_url}/audio/transcriptions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            data={"model": str(config["typhoon_model"])},
+            files={"file": (audio_path.name, audio_file, "audio/wav")},
+            timeout=120,
+        )
+    response.raise_for_status()
+
+    payload = response.json()
+    text = payload.get("text", "") if isinstance(payload, dict) else str(payload)
+    return _rows_from_transcript_text(text, max_characters=int(config["max_chunk_characters"]))
+
+
+def _parse_config_value(value: str) -> Any:
+    if value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return value.strip("\"'")
+
+
+def _rows_from_transcript_text(text: str, max_characters: int) -> list[dict[str, str]]:
+    words = text.split()
+    if not words:
+        return []
+
+    rows = []
+    current = []
+    current_length = 0
+
+    for word in words:
+        if current and word in TRANSCRIPT_BREAK_WORDS:
+            rows.append({"timestamp": f"transcript-{len(rows) + 1:02d}", "text": " ".join(current)})
+            current = []
+            current_length = 0
+
+        next_length = current_length + len(word) + (1 if current else 0)
+        if current and next_length > max_characters:
+            rows.append({"timestamp": f"transcript-{len(rows) + 1:02d}", "text": " ".join(current)})
+            current = []
+            current_length = 0
+
+        # ponytail: word-budget chunks are enough for API transcripts; add timestamps only if backend returns them.
+        current.append(word)
+        current_length += len(word) + (1 if len(current) > 1 else 0)
+
+    if current:
+        rows.append({"timestamp": f"transcript-{len(rows) + 1:02d}", "text": " ".join(current)})
+
+    return rows
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the ThaiMeetScribe final demo.")
+    parser.add_argument("--audio", type=Path, help="Path to a meeting audio file.")
+    parser.add_argument("--question", required=True, help="Question to answer from the meeting transcript.")
+    parser.add_argument("--config", type=Path, default=Path("configs/final_demo.yaml"))
+    parser.add_argument("--demo", action="store_true", help="Run the pipeline with built-in sample transcript rows.")
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    if args.demo:
+        rows = DEMO_ROWS
+    elif args.audio:
+        rows = transcribe_audio(args.audio, config)
+    else:
+        raise SystemExit("Provide --audio path/to/audio.wav or use --demo for the built-in sample.")
+
+    result = run_demo_from_rows(rows, args.question, config)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    assert _rows_from_transcript_text("หนึ่ง สอง สาม สี่", max_characters=9) == [
+        {"timestamp": "transcript-01", "text": "หนึ่ง สอง"},
+        {"timestamp": "transcript-02", "text": "สาม สี่"},
+    ]
+    assert _rows_from_transcript_text(
+        "ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์ นอกจากนี้ ที่ประชุมพูดถึงความเสี่ยง",
+        max_characters=70,
+    ) == [
+        {"timestamp": "transcript-01", "text": "ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์"},
+        {"timestamp": "transcript-02", "text": "นอกจากนี้ ที่ประชุมพูดถึงความเสี่ยง"},
+    ]
+    main()

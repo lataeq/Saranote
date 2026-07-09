@@ -1,0 +1,16 @@
+# Flat config parsed by src/pipeline/run_demo.py without external YAML dependencies.
+# asr_backend=typhoon_api is experimental/API-based; whisper remains the open-weight local path.
+asr_backend: typhoon_api
+model_name: openai/whisper-medium
+language: thai
+task: transcribe
+typhoon_model: typhoon-asr-realtime
+typhoon_api_base_url: https://api.opentyphoon.ai/v1
+typhoon_api_key_env: TYPHOON_API_KEY
+sample_rate: 16000
+chunk_seconds: 8
+overlap_seconds: 1
+max_chunk_characters: 70
+top_k: 1
+max_summary_points: 1
+silence_threshold: 0.001

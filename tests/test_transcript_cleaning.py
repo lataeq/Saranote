@@ -16,6 +16,16 @@ class TranscriptCleaningTest(unittest.TestCase):
     def test_clean_transcript_text_keeps_non_adjacent_repeats(self):
         self.assertEqual(clean_transcript_text("มติ เห็นชอบ มติ"), "มติ เห็นชอบ มติ")
 
+    def test_clean_transcript_text_fixes_common_meeting_asr_errors(self):
+        text = "โดยรถค่าใช้จ่าย ฝ่ายดำเนื้องานต้องส่งเอกสารงุบประมาณชะบับแก้ไขไพ้ในวันสุข"
+        self.assertEqual(
+            clean_transcript_text(text),
+            "โดยลดค่าใช้จ่าย ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์",
+        )
+
+    def test_clean_transcript_text_normalizes_decomposed_sara_am(self):
+        self.assertEqual(clean_transcript_text("ฝ่ายดําเนินงาน"), "ฝ่ายดำเนินงาน")
+
     def test_clean_transcript_text_rejects_invalid_repeat_limit(self):
         with self.assertRaises(ValueError):
             clean_transcript_text("สวัสดี", max_token_repeats=0)
