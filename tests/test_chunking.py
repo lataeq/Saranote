@@ -53,6 +53,17 @@ class RetrievalTest(unittest.TestCase):
 
         self.assertEqual(results[0].chunk.text, "ที่ประชุมมีมติเรื่องงบประมาณ")
 
+    def test_search_chunks_ignores_weak_ngram_false_positive(self):
+        rows = [
+            {"timestamp": "transcript-01", "text": "สวัสดีครับ วันนี้เป็นการประชุมเรื่องแผนงบประมาณโครงการใหม่"},
+            {"timestamp": "transcript-02", "text": "ที่ประชุมมีมติให้ปรับแผนงบประมาณ โดยลดค่าใช้จ่าย"},
+        ]
+        chunks = chunk_transcript_rows(rows)
+
+        results = search_chunks("ใครเป็นผู้อนุมัติโครงการนี้", chunks)
+
+        self.assertEqual(results, [])
+
 
 if __name__ == "__main__":
     unittest.main()

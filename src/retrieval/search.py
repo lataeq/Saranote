@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from src.retrieval.chunking import TranscriptChunk
 
 
+MIN_NGRAM_SCORE = 0.35
+
+
 @dataclass(frozen=True)
 class SearchResult:
     chunk: TranscriptChunk
@@ -49,7 +52,11 @@ def _score_chunk(
     if not overlap:
         return 0.0, []
 
-    return len(overlap) / len(query_grams), []
+    score = len(overlap) / len(query_grams)
+    if score < MIN_NGRAM_SCORE:
+        return 0.0, []
+
+    return score, []
 
 
 def _terms(text: str) -> list[str]:
@@ -74,4 +81,5 @@ if __name__ == "__main__":
     results = search_chunks("งบประมาณ", chunks)
     assert results[0].chunk.index == 2
     assert search_chunks("", chunks) == []
+    assert search_chunks("ใครเป็นผู้อนุมัติโครงการนี้", chunks) == []
     print("search self-check passed")
