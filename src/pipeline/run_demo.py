@@ -5,7 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from src.retrieval.chunking import chunk_transcript_rows
+from src.documents.presentation import load_presentation
+from src.retrieval.chunking import TranscriptChunk, chunk_transcript_rows
 from src.retrieval.search import search_chunks
 from src.summarization.action_items import extract_action_items
 from src.summarization.summarize import summarize_from_context
@@ -63,16 +64,56 @@ def run_demo_from_rows(
     rows: list[dict[str, Any]],
     question: str,
     config: dict[str, Any],
+    presentation_rows: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     cleaned_rows = clean_transcript_rows(rows)
     chunks = chunk_transcript_rows(cleaned_rows, max_characters=int(config["max_chunk_characters"]))
-    search_results = search_chunks(question, chunks, top_k=int(config["top_k"]))
+    top_k = int(config["top_k"])
+    search_results = search_chunks(question, chunks, top_k=top_k)
     retrieved_context = _expand_retrieved_context(question, search_results, chunks)
+    for context in retrieved_context:
+        context["source"] = "transcript"
+        context["location"] = context["start_timestamp"]
+
+    presentation_rows = presentation_rows or []
+    presentation_chunks = [
+        TranscriptChunk(index, row["location"], row["location"], row["text"], 1)
+        for index, row in enumerate(presentation_rows, start=1)
+    ]
+    for result in search_chunks(question, presentation_chunks, top_k=top_k):
+        row = presentation_rows[result.chunk.index - 1]
+        retrieved_context.append(
+            {
+                "score": result.score,
+                "matched_terms": result.matched_terms,
+                "source": row["source"],
+                "filename": row["filename"],
+                "location": row["location"],
+                "start_timestamp": row["location"],
+                "end_timestamp": row["location"],
+                "text": row["text"],
+            }
+        )
+
+    ranked_context = sorted(retrieved_context, key=lambda context: -context["score"])
+    retrieved_context = ranked_context[:top_k]
+    if retrieved_context:
+        cutoff_score = retrieved_context[-1]["score"]
+        selected_sources = {context["source"] for context in retrieved_context}
+        for context in ranked_context[top_k:]:
+            if context["score"] != cutoff_score:
+                break
+            if context["source"] not in selected_sources:
+                retrieved_context.append(context)
+                selected_sources.add(context["source"])
+
     answer = summarize_from_context(
         question,
         [context["text"] for context in retrieved_context],
         max_points=int(config["max_summary_points"]),
     )
+    if any(context["source"] == "presentation" for context in retrieved_context):
+        answer = answer.replace("จาก transcript ที่เกี่ยวข้อง:", "จากหลักฐานที่เกี่ยวข้อง:", 1)
 
     return {
         "question": question,
@@ -262,7 +303,8 @@ def _rows_from_transcript_text(text: str, max_characters: int) -> list[dict[str,
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the ThaiMeetScribe final demo.")
     parser.add_argument("--audio", type=Path, help="Path to a meeting audio file.")
-    parser.add_argument("--question", required=True, help="Question to answer from the meeting transcript.")
+    parser.add_argument("--presentation", type=Path, help="Optional PPTX or PDF meeting presentation.")
+    parser.add_argument("--question", required=True, help="Question to answer from meeting evidence.")
     parser.add_argument("--config", type=Path, default=Path("configs/final_demo.yaml"))
     parser.add_argument("--demo", action="store_true", help="Run the pipeline with built-in sample transcript rows.")
     args = parser.parse_args()
@@ -275,7 +317,8 @@ def main() -> None:
     else:
         raise SystemExit("Provide --audio path/to/audio.wav or use --demo for the built-in sample.")
 
-    result = run_demo_from_rows(rows, args.question, config)
+    presentation_rows = load_presentation(args.presentation) if args.presentation else None
+    result = run_demo_from_rows(rows, args.question, config, presentation_rows)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
