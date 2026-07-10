@@ -7,6 +7,7 @@ from typing import Any
 
 from src.retrieval.chunking import chunk_transcript_rows
 from src.retrieval.search import search_chunks
+from src.summarization.action_items import extract_action_items
 from src.summarization.summarize import summarize_from_context
 from src.transcript.clean import clean_transcript_rows
 from src.transcript.segment import split_audio
@@ -78,6 +79,7 @@ def run_demo_from_rows(
         "answer": answer,
         "cleaned_rows": cleaned_rows,
         "retrieved_context": retrieved_context,
+        "action_items": extract_action_items(cleaned_rows),
     }
 
 

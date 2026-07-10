@@ -23,9 +23,10 @@ class ActionItemTest(unittest.TestCase):
     def test_extracts_every_party_followup(self):
         rows = [
             {
-                "timestamp": "00:00:35 - 00:00:41",
-                "text": "ที่ประชุมขอให้ทุกฝ่ายตรวจสอบข้อมูลก่อนส่งรายงาน",
-            }
+                "timestamp": "transcript-05",
+                "text": "ที่ประชุมพูดถึงความเสี่ยง และขอให้ทุก",
+            },
+            {"timestamp": "transcript-06", "text": "ฝ่าย ตรวจสอบข้อมูลก่อนส่งรายงาน"},
         ]
 
         item = extract_action_items(rows)[0]
@@ -33,6 +34,8 @@ class ActionItemTest(unittest.TestCase):
         self.assertEqual(item["owner"], "ทุกฝ่าย")
         self.assertEqual(item["task"], "ตรวจสอบข้อมูล")
         self.assertEqual(item["deadline"], "ก่อนส่งรายงาน")
+        self.assertEqual(item["evidence"]["timestamp"], "transcript-05 - transcript-06")
+        self.assertIn("ขอให้ทุกฝ่าย ตรวจสอบข้อมูล", item["evidence"]["text"])
 
     def test_keeps_missing_deadline_empty(self):
         rows = [{"timestamp": "transcript-01", "text": "ทีมการเงินต้องตรวจสอบยอดเงิน"}]

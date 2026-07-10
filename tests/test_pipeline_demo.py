@@ -7,6 +7,22 @@ CONFIG = {"max_chunk_characters": 35, "top_k": 1, "max_summary_points": 1}
 
 
 class PipelineDemoTest(unittest.TestCase):
+    def test_run_demo_includes_evidence_linked_action_items(self):
+        rows = [
+            {"timestamp": "transcript-01", "text": "ที่ประชุมมีมติให้ปรับแผนงบประมาณ"},
+            {
+                "timestamp": "transcript-02",
+                "text": "ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์",
+            },
+        ]
+
+        result = run_demo_from_rows(rows, "ที่ประชุมมีมติเรื่องงบประมาณอย่างไร", CONFIG)
+
+        self.assertEqual(len(result["action_items"]), 1)
+        self.assertEqual(result["action_items"][0]["owner"], "ฝ่ายดำเนินงาน")
+        self.assertEqual(result["action_items"][0]["evidence"]["timestamp"], "transcript-02")
+        self.assertFalse(result["action_items"][0]["approved"])
+
     def test_run_demo_expands_moderate_budget_match_to_next_chunk(self):
         rows = [
             {"timestamp": "transcript-01", "text": "เปิดประชุม"},
@@ -39,6 +55,12 @@ class PipelineDemoTest(unittest.TestCase):
         result = run_demo_from_rows(rows, "ทุกฝ่ายต้องทำอะไรก่อนส่งรายงาน", CONFIG)
 
         self.assertIn("ทุกฝ่าย ตรวจสอบข้อมูลก่อนส่งรายงาน", result["answer"])
+        self.assertEqual(result["action_items"][0]["owner"], "ทุกฝ่าย")
+        self.assertEqual(result["action_items"][0]["task"], "ตรวจสอบข้อมูล")
+        self.assertEqual(
+            result["action_items"][0]["evidence"]["timestamp"],
+            "transcript-05 - transcript-06",
+        )
 
 
 if __name__ == "__main__":

@@ -14,9 +14,20 @@ ACTION_PATTERNS = (
 
 def extract_action_items(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     action_items = []
+    normalized_rows = [
+        (row, re.sub(r"\s+", " ", str(row.get("text", ""))).strip())
+        for row in rows
+    ]
 
-    for row in rows:
-        text = re.sub(r"\s+", " ", str(row.get("text", ""))).strip()
+    for index, (row, text) in enumerate(normalized_rows):
+        evidence_timestamp = str(row.get("timestamp", ""))
+        if index + 1 < len(normalized_rows) and text.endswith("ทุก"):
+            next_row, next_text = normalized_rows[index + 1]
+            if next_text.startswith("ฝ่าย"):
+                text += next_text
+                next_timestamp = str(next_row.get("timestamp", ""))
+                evidence_timestamp = " - ".join(filter(None, (evidence_timestamp, next_timestamp)))
+
         matches = (pattern.search(text) for pattern in ACTION_PATTERNS)
         match = next((match for match in matches if match), None)
         if not match:
@@ -36,7 +47,7 @@ def extract_action_items(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, An
                 "approved": False,
                 "evidence": {
                     "source": str(row.get("source", "transcript")),
-                    "timestamp": str(row.get("timestamp", "")),
+                    "timestamp": evidence_timestamp,
                     "text": text,
                 },
             }
