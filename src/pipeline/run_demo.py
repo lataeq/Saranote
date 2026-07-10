@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ DEFAULT_CONFIG = {
 
 
 TRANSCRIPT_BREAK_WORDS = {"นอกจากนี้", "อย่างไรก็ตาม", "ถัดไป"}
+EXPAND_CONTEXT_BELOW_SCORE = 0.6
 
 
 DEMO_ROWS = [
@@ -64,23 +66,18 @@ def run_demo_from_rows(
     cleaned_rows = clean_transcript_rows(rows)
     chunks = chunk_transcript_rows(cleaned_rows, max_characters=int(config["max_chunk_characters"]))
     search_results = search_chunks(question, chunks, top_k=int(config["top_k"]))
-    retrieved_context = [result.chunk.text for result in search_results]
-    answer = summarize_from_context(question, retrieved_context, max_points=int(config["max_summary_points"]))
+    retrieved_context = _expand_retrieved_context(question, search_results, chunks)
+    answer = summarize_from_context(
+        question,
+        [context["text"] for context in retrieved_context],
+        max_points=int(config["max_summary_points"]),
+    )
 
     return {
         "question": question,
         "answer": answer,
         "cleaned_rows": cleaned_rows,
-        "retrieved_context": [
-            {
-                "score": result.score,
-                "matched_terms": result.matched_terms,
-                "start_timestamp": result.chunk.start_timestamp,
-                "end_timestamp": result.chunk.end_timestamp,
-                "text": result.chunk.text,
-            }
-            for result in search_results
-        ],
+        "retrieved_context": retrieved_context,
     }
 
 
@@ -170,6 +167,65 @@ def _parse_config_value(value: str) -> Any:
         return value.strip("\"'")
 
 
+def _expand_retrieved_context(question: str, search_results: list[Any], chunks: list[Any]) -> list[dict[str, Any]]:
+    expanded = []
+
+    for result in search_results:
+        position = result.chunk.index - 1
+        start = position
+        end = position
+
+        # ponytail: expand only moderate matches; strong action-item matches stay tight.
+        if result.score < EXPAND_CONTEXT_BELOW_SCORE:
+            if position < len(chunks) - 1 and _has_query_fragment(question, chunks[position + 1].text):
+                end = position + 1
+            split_every_party = (
+                position
+                and chunks[position - 1].text.rstrip().endswith("ทุก")
+                and result.chunk.text.startswith("ฝ่าย")
+            )
+            if split_every_party:
+                start = position - 1
+
+        context_chunks = chunks[start : end + 1]
+        expanded.append(
+            {
+                "score": result.score,
+                "matched_terms": result.matched_terms,
+                "start_timestamp": context_chunks[0].start_timestamp,
+                "end_timestamp": context_chunks[-1].end_timestamp,
+                "text": _join_context_chunks(context_chunks),
+            }
+        )
+
+    return expanded
+
+
+def _has_query_fragment(question: str, text: str, size: int = 4) -> bool:
+    compact_question = re.sub(r"[^0-9a-zA-Z\u0e00-\u0e7f]+", "", question.lower())
+    compact_text = re.sub(r"[^0-9a-zA-Z\u0e00-\u0e7f]+", "", text.lower())
+    if len(compact_question) < size:
+        return compact_question in compact_text
+
+    return any(
+        compact_question[index : index + size] in compact_text
+        for index in range(len(compact_question) - size + 1)
+    )
+
+
+def _join_context_chunks(chunks: list[Any]) -> str:
+    parts = []
+
+    for chunk in chunks:
+        for line in chunk.text.splitlines():
+            if parts and parts[-1].endswith("ทุก") and line.startswith("ฝ่าย"):
+                parts[-1] += line
+            else:
+                parts.append(line)
+
+    return " ".join(parts)
+
+
 def _rows_from_transcript_text(text: str, max_characters: int) -> list[dict[str, str]]:
     words = text.split()
     if not words:
@@ -233,4 +289,12 @@ if __name__ == "__main__":
         {"timestamp": "transcript-01", "text": "ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์"},
         {"timestamp": "transcript-02", "text": "นอกจากนี้ ที่ประชุมพูดถึงความเสี่ยง"},
     ]
+    assert run_demo_from_rows(
+        [
+            {"timestamp": "transcript-01", "text": "ที่ประชุมมีมติให้ปรับแผนงบประมาณ โดยลดค่าใช้จ่าย"},
+            {"timestamp": "transcript-02", "text": "ย้ายงบประมาณบางส่วนไปสนับสนุนงานอบรมทีมงาน"},
+        ],
+        "ที่ประชุมมีมติเรื่องงบประมาณอย่างไร",
+        {"max_chunk_characters": 70, "top_k": 1, "max_summary_points": 1},
+    )["retrieved_context"][0]["end_timestamp"] == "transcript-02"
     main()
