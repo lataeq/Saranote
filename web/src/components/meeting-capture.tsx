@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileUp, Mic, Square, Upload } from "lucide-react";
+import { FileUp, Mic, RefreshCw, Square, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 type UploadKind = "audio" | "document";
 
-export function MeetingCapture({ meetingId }: { meetingId: number }) {
+export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: number; canRetry?: boolean }) {
   const router = useRouter();
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -83,6 +83,24 @@ export function MeetingCapture({ meetingId }: { meetingId: number }) {
     }
   }
 
+  async function retry() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/meetings/${meetingId}/process`, { method: "POST" });
+      const result = (await response.json()) as { error?: string; processing?: { status: "completed"; actions: number; assigned: number } | { status: "failed"; error: string } };
+      if (!response.ok || !result.processing) throw new Error(result.error || "Retry failed.");
+      if (result.processing.status === "failed") throw new Error(result.processing.error);
+      setMessage({ text: `Transcript generated. ${result.processing.assigned} new assignments added to My work.`, error: false });
+      router.refresh();
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : "Retry failed.", error: true });
+      router.refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function stopRecording() {
     recorderRef.current?.stop();
     recorderRef.current = null;
@@ -107,6 +125,7 @@ export function MeetingCapture({ meetingId }: { meetingId: number }) {
         <input ref={audioInputRef} className="sr-only" type="file" accept="audio/*,.wav,.mp3,.m4a,.flac" onChange={(event) => selectedFile(event, "audio")} disabled={busy} />
         <Button type="button" variant="outline" onClick={() => documentInputRef.current?.click()} disabled={busy}><FileUp className="size-4" /> Import document</Button>
         <input ref={documentInputRef} className="sr-only" type="file" accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,application/pdf" onChange={(event) => selectedFile(event, "document")} disabled={busy} />
+        {canRetry ? <Button type="button" variant="outline" onClick={() => void retry()} disabled={busy}><RefreshCw className="size-4" /> Retry processing</Button> : null}
       </div>
       {busy ? <p className="text-[12px] text-subtle">Saving file… Audio transcription may take a few minutes.</p> : null}
       {message ? <Alert variant={message.error ? "destructive" : "default"}><AlertDescription>{message.text}</AlertDescription></Alert> : null}

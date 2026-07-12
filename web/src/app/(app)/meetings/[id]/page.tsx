@@ -46,7 +46,7 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
             <h1 className="max-w-3xl text-[24px] font-semibold leading-8">{meeting.title}</h1>
             <div className="mt-2 flex items-center gap-1.5 text-[13px] text-default"><Calendar className="size-4" /> {formatDateTime(meeting.heldAt)}</div>
           </div>
-          {user.role !== "team_member" ? <MeetingCapture meetingId={meeting.id} /> : null}
+          {user.role !== "team_member" ? <MeetingCapture meetingId={meeting.id} canRetry={meeting.processingStatus === "failed" && audioFiles.length > 0} /> : null}
         </div>
       </header>
 

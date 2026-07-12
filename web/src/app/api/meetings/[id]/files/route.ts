@@ -1,18 +1,15 @@
-import { execFile } from "node:child_process";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 import { revalidatePath } from "next/cache";
 import { currentUser } from "@/lib/auth";
-import { addFile, failMeetingProcessing, finishMeetingProcessing, getMeeting, getSetting, startMeetingProcessing, uploadsDirectory, type DetectedAction } from "@/lib/db";
+import { addFile, getMeeting, uploadsDirectory } from "@/lib/db";
 import { canAccessMeeting } from "@/lib/domain";
+import { processMeetingAudio, type ProcessingResult } from "@/lib/meeting-processing";
 
 export const runtime = "nodejs";
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const DOCUMENT_EXTENSIONS = new Set([".pdf", ".ppt", ".pptx", ".doc", ".docx", ".txt"]);
-const TYPHOON_AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".flac", ".ogg", ".opus"]);
-const execFileAsync = promisify(execFile);
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await currentUser();
@@ -42,40 +39,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   await writeFile(destination, new Uint8Array(await file.arrayBuffer()));
   try {
     const id = addFile({ meetingId, taskId: null, originalName, storedName, mimeType: file.type || "application/octet-stream", kind, size: file.size, uploadedBy: user.id });
-    let processing: { status: "completed"; actions: number; assigned: number } | { status: "failed"; error: string } | undefined;
+    let processing: ProcessingResult | undefined;
     if (kind === "audio") {
-      startMeetingProcessing(meetingId);
-      try {
-        const projectRoot = process.env.SARANOTE_PROJECT_ROOT || path.resolve(process.cwd(), "..");
-        const python = process.env.SARANOTE_PYTHON || path.join(projectRoot, ".venv", "bin", "python");
-        const typhoonApiKey = getSetting("typhoon_api_key") || process.env.TYPHOON_API_KEY;
-        const transcriptionPath = TYPHOON_AUDIO_EXTENSIONS.has(extension) ? destination : `${destination}.wav`;
-        let stdout: string;
-        try {
-          if (transcriptionPath !== destination) {
-            await execFileAsync("ffmpeg", ["-y", "-i", destination, "-ar", "16000", "-ac", "1", transcriptionPath], { timeout: 120_000 });
-          }
-          ({ stdout } = await execFileAsync(python, [
-            "-m", "src.pipeline.run_demo",
-            "--audio", transcriptionPath,
-            "--config", path.join(projectRoot, "configs", "final_demo.yaml"),
-            "--process",
-          ], { cwd: projectRoot, env: { ...process.env, ...(typhoonApiKey ? { TYPHOON_API_KEY: typhoonApiKey } : {}) }, timeout: 180_000, maxBuffer: 10 * 1024 * 1024 }));
-        } finally {
-          if (transcriptionPath !== destination) await unlink(transcriptionPath).catch(() => undefined);
-        }
-        const result = JSON.parse(stdout) as { transcript: string; action_items: DetectedAction[] };
-        const assigned = finishMeetingProcessing(meetingId, result.transcript, result.action_items, user.id);
-        processing = { status: "completed", actions: result.action_items.length, assigned };
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : "";
-        const apiError = detail.match(/Typhoon ASR failed: ([^\n]+)/)?.[1];
-        const message = detail.includes("TYPHOON_API_KEY")
-          ? "Typhoon API key is not configured on the web server."
-          : apiError || "Audio was saved, but automatic transcription failed.";
-        failMeetingProcessing(meetingId, message);
-        processing = { status: "failed", error: message };
-      }
+      processing = await processMeetingAudio(meetingId, destination, user.id);
     }
     revalidatePath(`/meetings/${meetingId}`);
     return Response.json({ id, processing }, { status: 201 });
