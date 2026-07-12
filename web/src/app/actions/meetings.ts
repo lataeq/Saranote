@@ -6,12 +6,14 @@ import { requireManager, requireWorkManager } from "@/lib/auth";
 import {
   createMeeting,
   createTask,
+  deleteTask,
   getMeeting,
   getTask,
   getUser,
   reviewTask,
   updateMeetingTeam,
   updateMeetingTranscript,
+  updateTask,
 } from "@/lib/db";
 import {
   canAccessMeeting,
@@ -131,6 +133,49 @@ export async function createTaskAction(formData: FormData): Promise<void> {
     createdBy: manager.id,
   });
   revalidatePath(`/meetings/${meetingId}`);
+  revalidatePath("/work");
+}
+
+export async function updateTaskAction(formData: FormData): Promise<void> {
+  const manager = await requireWorkManager();
+  const taskId = positiveId(formData.get("taskId"));
+  const assigneeId = positiveId(formData.get("assigneeId"));
+  const title = field(formData, "title");
+  const description = field(formData, "description");
+  const dueAtRaw = field(formData, "dueAt");
+  const task = getTask(taskId);
+  const meeting = task ? getMeeting(task.meetingId) : undefined;
+  const assignee = getUser(assigneeId);
+  if (
+    !task || task.status !== "pending" || !meeting || !assignee || !title
+    || !canAccessMeeting(manager.role, manager.team, manager.id, meeting.accessRules)
+    || !canManageTeam(manager.role, manager.team, task.assigneeTeam)
+    || !canManageTeam(manager.role, manager.team, assignee.team)
+    || assignee.role === "manager"
+    || !isMeetingParticipant(assignee.role, assignee.team, assignee.id, meeting.accessRules)
+  ) return;
+  updateTask(task.id, {
+    title,
+    description,
+    assigneeId: assignee.id,
+    dueAt: dueAtRaw ? new Date(dueAtRaw).toISOString() : null,
+  });
+  revalidatePath(`/meetings/${task.meetingId}`);
+  revalidatePath("/work");
+}
+
+export async function deleteTaskAction(formData: FormData): Promise<void> {
+  const manager = await requireWorkManager();
+  const taskId = positiveId(formData.get("taskId"));
+  const task = getTask(taskId);
+  const meeting = task ? getMeeting(task.meetingId) : undefined;
+  if (
+    !task || task.status !== "pending" || !meeting
+    || !canAccessMeeting(manager.role, manager.team, manager.id, meeting.accessRules)
+    || !canManageTeam(manager.role, manager.team, task.assigneeTeam)
+  ) return;
+  deleteTask(task.id);
+  revalidatePath(`/meetings/${task.meetingId}`);
   revalidatePath("/work");
 }
 

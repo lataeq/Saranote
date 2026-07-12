@@ -488,6 +488,16 @@ export function createTask(input: {
   return Number(result.lastInsertRowid);
 }
 
+export function updateTask(id: number, input: { title: string; description: string; assigneeId: number; dueAt: string | null }): void {
+  prepare(
+    "UPDATE tasks SET title = ?, description = ?, assignee_id = ?, due_at = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+  ).run(input.title, input.description, input.assigneeId, input.dueAt, new Date().toISOString(), id);
+}
+
+export function deleteTask(id: number): void {
+  prepare("DELETE FROM tasks WHERE id = ? AND status = 'pending'").run(id);
+}
+
 export function getTask(id: number): Task | undefined {
   return prepare(
     `SELECT ${taskColumns} FROM tasks t
