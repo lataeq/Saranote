@@ -35,6 +35,13 @@ DEFAULT_CONFIG = {
 
 TRANSCRIPT_BREAK_WORDS = {"นอกจากนี้", "อย่างไรก็ตาม", "ถัดไป"}
 EXPAND_CONTEXT_BELOW_SCORE = 0.6
+AUDIO_MIME_TYPES = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mp3",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+}
 
 
 DEMO_ROWS = [
@@ -124,6 +131,18 @@ def run_demo_from_rows(
     }
 
 
+def process_meeting_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    cleaned_rows = clean_transcript_rows(rows)
+    return {
+        "cleaned_rows": cleaned_rows,
+        "transcript": "\n".join(
+            f"[{row['timestamp']}] {row['text']}" if row.get("timestamp") else str(row["text"])
+            for row in cleaned_rows
+        ),
+        "action_items": extract_action_items(cleaned_rows),
+    }
+
+
 def transcribe_audio(audio_path: Path, config: dict[str, Any]) -> list[dict[str, str]]:
     backend = str(config.get("asr_backend", "whisper"))
     if backend == "typhoon_api":
@@ -187,10 +206,15 @@ def transcribe_audio_with_typhoon(audio_path: Path, config: dict[str, Any]) -> l
             f"{base_url}/audio/transcriptions",
             headers={"Authorization": f"Bearer {api_key}"},
             data={"model": str(config["typhoon_model"])},
-            files={"file": (audio_path.name, audio_file, "audio/wav")},
+            files={"file": (audio_path.name, audio_file, AUDIO_MIME_TYPES.get(audio_path.suffix.lower(), "application/octet-stream"))},
             timeout=120,
         )
-    response.raise_for_status()
+    if response.is_error:
+        try:
+            message = str(response.json().get("error", {}).get("message", ""))
+        except (TypeError, ValueError):
+            message = response.text
+        raise RuntimeError(f"Typhoon ASR failed: {message or f'HTTP {response.status_code}'}")
 
     payload = response.json()
     text = payload.get("text", "") if isinstance(payload, dict) else str(payload)
@@ -304,9 +328,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the ThaiMeetScribe final demo.")
     parser.add_argument("--audio", type=Path, help="Path to a meeting audio file.")
     parser.add_argument("--presentation", type=Path, help="Optional PPTX or PDF meeting presentation.")
-    parser.add_argument("--question", required=True, help="Question to answer from meeting evidence.")
+    parser.add_argument("--question", help="Question to answer from meeting evidence.")
     parser.add_argument("--config", type=Path, default=Path("configs/final_demo.yaml"))
     parser.add_argument("--demo", action="store_true", help="Run the pipeline with built-in sample transcript rows.")
+    parser.add_argument("--process", action="store_true", help="Return cleaned transcript and detected action items for the web app.")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -317,12 +342,18 @@ def main() -> None:
     else:
         raise SystemExit("Provide --audio path/to/audio.wav or use --demo for the built-in sample.")
 
-    presentation_rows = load_presentation(args.presentation) if args.presentation else None
-    result = run_demo_from_rows(rows, args.question, config, presentation_rows)
+    if args.process:
+        result = process_meeting_rows(rows)
+    else:
+        if not args.question:
+            raise SystemExit("Provide --question unless --process is used.")
+        presentation_rows = load_presentation(args.presentation) if args.presentation else None
+        result = run_demo_from_rows(rows, args.question, config, presentation_rows)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
+    assert AUDIO_MIME_TYPES[".mp3"] == "audio/mp3"
     assert _rows_from_transcript_text("หนึ่ง สอง สาม สี่", max_characters=9) == [
         {"timestamp": "transcript-01", "text": "หนึ่ง สอง"},
         {"timestamp": "transcript-02", "text": "สาม สี่"},

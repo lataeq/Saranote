@@ -4,6 +4,21 @@ from src.summarization.action_items import extract_action_items
 
 
 class ActionItemTest(unittest.TestCase):
+    def test_extracts_natural_named_assignment_across_rows(self):
+        rows = [
+            {"timestamp": "transcript-07", "text": "ผมขอมอบหมายงานให้นัทสิทธิ์พีไปทำต่อนะครับ"},
+            {"timestamp": "transcript-08", "text": "โดยมีข้อกำหนดสองอย่างคือหนึ่ง เขียนยูนิเทส"},
+            {"timestamp": "transcript-09", "text": "สำหรับหน้าล็อกอิน และสอง พัฒนาระบบอัปโหลดไฟล์"},
+            {"timestamp": "transcript-10", "text": "บนหน้าเวิร์คให้เรียบร้อย"},
+            {"timestamp": "transcript-11", "text": "รบกวนส่งงานให้ผมตรวจภายในวันศุกร์นี้นะครับ"},
+        ]
+        items = extract_action_items(rows)
+        self.assertEqual(len(items), 2)
+        self.assertEqual([item["owner"] for item in items], ["นัทสิทธิ์พี", "นัทสิทธิ์พี"])
+        self.assertIn("เขียนยูนิเทส", items[0]["task"])
+        self.assertIn("พัฒนาระบบอัปโหลดไฟล์", items[1]["task"])
+        self.assertEqual([item["deadline"] for item in items], ["วันศุกร์นี้", "วันศุกร์นี้"])
+
     def test_extracts_explicit_owner_task_deadline_and_evidence(self):
         rows = [
             {

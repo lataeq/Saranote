@@ -1,12 +1,22 @@
 import unittest
 
-from src.pipeline.run_demo import run_demo_from_rows
+from src.pipeline.run_demo import AUDIO_MIME_TYPES, process_meeting_rows, run_demo_from_rows
 
 
 CONFIG = {"max_chunk_characters": 35, "top_k": 1, "max_summary_points": 1}
 
 
 class PipelineDemoTest(unittest.TestCase):
+    def test_typhoon_uses_api_accepted_mp3_mime_type(self):
+        self.assertEqual(AUDIO_MIME_TYPES[".mp3"], "audio/mp3")
+
+    def test_process_meeting_rows_returns_transcript_and_detected_actions(self):
+        result = process_meeting_rows([
+            {"timestamp": "transcript-01", "text": "ฝ่ายขายต้องส่งรายงานภายในวันศุกร์"},
+        ])
+        self.assertIn("ฝ่ายขายต้องส่งรายงานภายในวันศุกร์", result["transcript"])
+        self.assertEqual(result["action_items"][0]["owner"], "ฝ่ายขาย")
+
     def test_run_demo_retrieves_presentation_with_source_citation(self):
         rows = [{"timestamp": "transcript-01", "text": "ที่ประชุมหารือแผนงานทั่วไป"}]
         presentation_rows = [
