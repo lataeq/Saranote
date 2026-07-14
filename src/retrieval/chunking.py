@@ -38,7 +38,6 @@ def chunk_transcript_rows(
             current_texts = []
             current_length = 0
 
-        # ponytail: long single rows stay whole; split within a row only if real transcripts need it.
         current_rows.append(row)
         current_texts.append(text)
         current_length += len(text) + (1 if len(current_texts) > 1 else 0)

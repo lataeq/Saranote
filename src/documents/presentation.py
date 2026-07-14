@@ -48,7 +48,6 @@ def _load_pptx(path: Path) -> list[dict[str, str]]:
                     }
                 )
 
-    # ponytail: numeric slide XML order; use python-pptx if reordered-deck support becomes necessary.
     return rows
 
 

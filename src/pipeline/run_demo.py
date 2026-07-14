@@ -245,7 +245,6 @@ def _expand_retrieved_context(question: str, search_results: list[Any], chunks: 
         start = position
         end = position
 
-        # ponytail: expand only moderate matches; strong action-item matches stay tight.
         if result.score < EXPAND_CONTEXT_BELOW_SCORE:
             if position < len(chunks) - 1 and _has_query_fragment(question, chunks[position + 1].text):
                 end = position + 1
@@ -317,7 +316,6 @@ def _rows_from_transcript_text(text: str, max_characters: int) -> list[dict[str,
             current = []
             current_length = 0
 
-        # ponytail: word-budget chunks are enough for API transcripts; add timestamps only if backend returns them.
         current.append(word)
         current_length += len(word) + (1 if len(current) > 1 else 0)
 

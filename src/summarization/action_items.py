@@ -65,7 +65,6 @@ def extract_action_items(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, An
         if not task:
             continue
 
-        # ponytail: explicit Thai assignment phrases only; use reviewed model extraction when phrasing varies.
         action_items.append(
             {
                 "task": task,

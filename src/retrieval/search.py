@@ -43,7 +43,6 @@ def _score_chunk(
     if matched_terms:
         return float(len(matched_terms)), matched_terms
 
-    # ponytail: cheap Thai fallback for unspaced questions; replace with tokenization/BM25 when misses matter.
     if not query_grams:
         return 0.0, []
 

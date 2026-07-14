@@ -21,7 +21,6 @@ def summarize_from_context(question: str, transcript_context: Iterable[str], max
     if not results:
         return format_meeting_minutes_answer([])
 
-    # ponytail: extractive baseline; use an open-weight model only after retrieval quality is proven.
     best_score = results[0].score
     best_results = [result for result in results if result.score == best_score][:max_points]
     return format_meeting_minutes_answer(result.chunk.text for result in best_results)

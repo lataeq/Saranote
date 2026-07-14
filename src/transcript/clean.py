@@ -31,7 +31,6 @@ def clean_transcript_text(text: str, max_token_repeats: int = 2) -> str:
 
     text = text.replace("\u0e4d\u0e32", "\u0e33")
 
-    # ponytail: tiny demo glossary; replace with real spell correction if ASR cleanup grows.
     for wrong, correct in COMMON_ASR_REPLACEMENTS.items():
         text = text.replace(wrong, correct)
 
@@ -41,7 +40,6 @@ def clean_transcript_text(text: str, max_token_repeats: int = 2) -> str:
     for token in tokens:
         if not token:
             continue
-        # ponytail: only trim spaced token repeats; add Thai segmentation if unspaced loops matter.
         if cleaned_tokens and token == cleaned_tokens[-1]:
             repeat_count = 1
             for previous in reversed(cleaned_tokens[:-1]):

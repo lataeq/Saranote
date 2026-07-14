@@ -2,7 +2,6 @@ from collections.abc import Sequence
 
 
 def _edit_distance(reference: Sequence[str], prediction: Sequence[str]) -> int:
-    # ponytail: O(n*m) DP is enough for small evaluation sets; use a library only if alignment details matter.
     previous = list(range(len(prediction) + 1))
 
     for i, ref_item in enumerate(reference, start=1):

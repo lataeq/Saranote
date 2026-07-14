@@ -31,7 +31,6 @@ def split_audio(
     segments = []
     start_sample = 0
 
-    # ponytail: fixed chunks are enough for Phase 6; add VAD later if boundary cuts dominate errors.
     while start_sample < total_samples:
         end_sample = min(start_sample + chunk_samples, total_samples)
         segments.append(
