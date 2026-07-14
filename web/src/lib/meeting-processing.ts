@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { failMeetingProcessing, finishMeetingProcessing, getSetting, startMeetingProcessing, type DetectedAction } from "@/lib/db";
+import { failMeetingProcessing, finishMeetingProcessing, getSetting, startMeetingProcessing, type DetectedAction, type MeetingSummary } from "@/lib/db";
 
 const execFileAsync = promisify(execFile);
 const TYPHOON_AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".flac", ".ogg", ".opus"]);
@@ -32,8 +32,8 @@ export async function processMeetingAudio(meetingId: number, audioPath: string, 
     } finally {
       if (transcriptionPath !== audioPath) await unlink(transcriptionPath).catch(() => undefined);
     }
-    const result = JSON.parse(stdout) as { transcript: string; action_items: DetectedAction[] };
-    const assigned = finishMeetingProcessing(meetingId, result.transcript, result.action_items, createdBy);
+    const result = JSON.parse(stdout) as { transcript: string; action_items: DetectedAction[]; summary: MeetingSummary };
+    const assigned = finishMeetingProcessing(meetingId, result.transcript, result.action_items, result.summary, createdBy);
     return { status: "completed", actions: result.action_items.length, assigned };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";

@@ -25,12 +25,20 @@ export type Meeting = {
   audienceUserName: string | null;
   accessRules: MeetingAccessRule[];
   extractedActions: DetectedAction[];
+  summary: MeetingSummary;
   processingStatus: "idle" | "processing" | "completed" | "failed";
   processingError: string;
   createdAt: string;
   createdByName: string;
   fileCount: number;
   taskCount: number;
+};
+
+export type MeetingSummary = {
+  decisions: string[];
+  risks: string[];
+  important_points: string[];
+  follow_ups: string[];
 };
 
 export type DetectedAction = {
@@ -179,6 +187,7 @@ function getDatabase(): Database.Database {
   if (!meetingColumnNames.has("extracted_actions")) instance.exec("ALTER TABLE meetings ADD COLUMN extracted_actions TEXT NOT NULL DEFAULT '[]'");
   if (!meetingColumnNames.has("processing_status")) instance.exec("ALTER TABLE meetings ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'idle'");
   if (!meetingColumnNames.has("processing_error")) instance.exec("ALTER TABLE meetings ADD COLUMN processing_error TEXT NOT NULL DEFAULT ''");
+  if (!meetingColumnNames.has("summary_json")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'");
   instance.exec(`
     INSERT OR IGNORE INTO meeting_access_rules (meeting_id, team, audience, audience_user_id)
     SELECT id, team, audience, audience_user_id FROM meetings WHERE team IS NOT NULL
@@ -300,14 +309,26 @@ function meetingAccessRules(meetingId: number): MeetingAccessRule[] {
   ).all(meetingId) as MeetingAccessRule[];
 }
 
-function hydrateMeeting(row: Omit<Meeting, "accessRules" | "extractedActions"> & { extractedActionsJson: string }): Meeting {
-  const { extractedActionsJson, ...meeting } = row;
+type StoredMeeting = Omit<Meeting, "accessRules" | "extractedActions" | "summary"> & { extractedActionsJson: string; summaryJson: string };
+
+function hydrateMeeting(row: StoredMeeting): Meeting {
+  const { extractedActionsJson, summaryJson, ...meeting } = row;
   let extractedActions: DetectedAction[] = [];
+  let summary: MeetingSummary = { decisions: [], risks: [], important_points: [], follow_ups: [] };
   try {
     const parsed = JSON.parse(extractedActionsJson);
     if (Array.isArray(parsed)) extractedActions = parsed as DetectedAction[];
   } catch {}
-  return { ...meeting, accessRules: meetingAccessRules(row.id), extractedActions };
+  try {
+    const parsed = JSON.parse(summaryJson) as Partial<MeetingSummary>;
+    summary = {
+      decisions: Array.isArray(parsed.decisions) ? parsed.decisions : [],
+      risks: Array.isArray(parsed.risks) ? parsed.risks : [],
+      important_points: Array.isArray(parsed.important_points) ? parsed.important_points : [],
+      follow_ups: Array.isArray(parsed.follow_ups) ? parsed.follow_ups : [],
+    };
+  } catch {}
+  return { ...meeting, accessRules: meetingAccessRules(row.id), extractedActions, summary };
 }
 
 export function createMeeting(input: {
@@ -337,7 +358,7 @@ export function listMeetings(viewer: Pick<User, "id" | "role" | "team">, search 
     `SELECT m.id, m.title, m.held_at AS heldAt, m.status, m.transcript,
       m.team, m.audience, m.audience_user_id AS audienceUserId, au.name AS audienceUserName,
       m.extracted_actions AS extractedActionsJson, m.processing_status AS processingStatus,
-      m.processing_error AS processingError,
+      m.processing_error AS processingError, m.summary_json AS summaryJson,
       m.created_at AS createdAt, u.name AS createdByName,
       COUNT(DISTINCT f.id) AS fileCount, COUNT(DISTINCT t.id) AS taskCount
      FROM meetings m JOIN users u ON u.id = m.created_by
@@ -345,7 +366,7 @@ export function listMeetings(viewer: Pick<User, "id" | "role" | "team">, search 
      LEFT JOIN files f ON f.meeting_id = m.id
      LEFT JOIN tasks t ON t.meeting_id = m.id
      WHERE (m.title LIKE ? OR m.transcript LIKE ?)`;
-  const meetings = (prepare(`${sql} GROUP BY m.id ORDER BY m.held_at DESC, m.id DESC`).all(pattern, pattern) as Array<Omit<Meeting, "accessRules" | "extractedActions"> & { extractedActionsJson: string }>).map(hydrateMeeting);
+  const meetings = (prepare(`${sql} GROUP BY m.id ORDER BY m.held_at DESC, m.id DESC`).all(pattern, pattern) as StoredMeeting[]).map(hydrateMeeting);
   return viewer.role === "manager"
     ? meetings
     : meetings.filter((meeting) => canAccessMeeting(viewer.role, viewer.team, viewer.id, meeting.accessRules));
@@ -356,7 +377,7 @@ export function getMeeting(id: number): Meeting | undefined {
     `SELECT m.id, m.title, m.held_at AS heldAt, m.status, m.transcript,
       m.team, m.audience, m.audience_user_id AS audienceUserId, au.name AS audienceUserName,
       m.extracted_actions AS extractedActionsJson, m.processing_status AS processingStatus,
-      m.processing_error AS processingError,
+      m.processing_error AS processingError, m.summary_json AS summaryJson,
       m.created_at AS createdAt, u.name AS createdByName,
       COUNT(DISTINCT f.id) AS fileCount, COUNT(DISTINCT t.id) AS taskCount
      FROM meetings m JOIN users u ON u.id = m.created_by
@@ -364,7 +385,7 @@ export function getMeeting(id: number): Meeting | undefined {
      LEFT JOIN files f ON f.meeting_id = m.id
      LEFT JOIN tasks t ON t.meeting_id = m.id
      WHERE m.id = ? GROUP BY m.id`,
-  ).get(id) as (Omit<Meeting, "accessRules" | "extractedActions"> & { extractedActionsJson: string }) | undefined;
+  ).get(id) as StoredMeeting | undefined;
   return row ? hydrateMeeting(row) : undefined;
 }
 
@@ -376,12 +397,12 @@ export function startMeetingProcessing(id: number): void {
   prepare("UPDATE meetings SET processing_status = 'processing', processing_error = '' WHERE id = ?").run(id);
 }
 
-export function finishMeetingProcessing(id: number, transcript: string, actions: DetectedAction[], createdBy: number): number {
+export function finishMeetingProcessing(id: number, transcript: string, actions: DetectedAction[], summary: MeetingSummary, createdBy: number): number {
   const resolvedActions = resolveActionOwners(actions);
   return getDatabase().transaction(() => {
     prepare(
-      "UPDATE meetings SET transcript = ?, extracted_actions = ?, processing_status = 'completed', processing_error = '' WHERE id = ?",
-    ).run(transcript, JSON.stringify(resolvedActions), id);
+      "UPDATE meetings SET transcript = ?, extracted_actions = ?, summary_json = ?, processing_status = 'completed', processing_error = '' WHERE id = ?",
+    ).run(transcript, JSON.stringify(resolvedActions), JSON.stringify(summary), id);
     const meeting = getMeeting(id);
     const creator = getUser(createdBy);
     if (!meeting || !creator) return 0;

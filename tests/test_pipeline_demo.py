@@ -16,6 +16,7 @@ class PipelineDemoTest(unittest.TestCase):
         ])
         self.assertIn("ฝ่ายขายต้องส่งรายงานภายในวันศุกร์", result["transcript"])
         self.assertEqual(result["action_items"][0]["owner"], "ฝ่ายขาย")
+        self.assertEqual(result["summary"]["follow_ups"], ["ฝ่ายขาย: ส่งรายงาน (กำหนด วันศุกร์)"])
 
     def test_run_demo_retrieves_presentation_with_source_citation(self):
         rows = [{"timestamp": "transcript-01", "text": "ที่ประชุมหารือแผนงานทั่วไป"}]

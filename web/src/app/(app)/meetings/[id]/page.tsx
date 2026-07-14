@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Calendar, Download, File, FileAudio, UserRound } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Calendar, CheckCircle2, Download, File, FileAudio, ListChecks, ListTree, UserRound } from "lucide-react";
 import { updateTranscriptAction } from "@/app/actions/meetings";
 import { MeetingCapture } from "@/components/meeting-capture";
 import { StatusBadge } from "@/components/status-badge";
@@ -35,6 +35,13 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
   const canManage = user.role === "manager" || user.role === "team_leader";
   const audioFiles = files.filter((file) => file.kind === "audio");
   const documents = files.filter((file) => file.kind === "document");
+  const summarySections = [
+    { label: "Decisions", icon: CheckCircle2, items: meeting.summary.decisions },
+    { label: "Risks", icon: AlertTriangle, items: meeting.summary.risks },
+    { label: "Important points", icon: ListTree, items: meeting.summary.important_points },
+    { label: "Follow-ups", icon: ListChecks, items: meeting.summary.follow_ups },
+  ];
+  const hasSummary = summarySections.some((section) => section.items.length);
 
   return (
     <div className="space-y-6">
@@ -63,6 +70,10 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
             <div><p className="text-[12px] text-subtle">Meeting date</p><p className="mt-1 font-medium">{formatDate(meeting.heldAt)}</p></div>
             <div><p className="text-[12px] text-subtle">Stored files</p><p className="mt-1 font-medium">{files.length}</p></div>
             <div><p className="text-[12px] text-subtle">Assignments</p><p className="mt-1 font-medium">{tasks.length}</p></div>
+          </section>
+          <section>
+            <h2 className="mb-3 text-[16px] font-semibold">Meeting summary</h2>
+            {hasSummary ? <div className="grid border-y sm:grid-cols-2">{summarySections.map((section, index) => { const Icon = section.icon; return <div key={section.label} className={`p-4 ${index > 1 ? "border-t" : ""} ${index % 2 ? "sm:border-l" : ""} ${index === 1 ? "border-t sm:border-t-0" : ""}`}><div className="mb-2 flex items-center gap-2"><Icon className="size-4 text-subtle" /><h3 className="text-[13px] font-medium">{section.label}</h3></div>{section.items.length ? <ul className="space-y-2 text-default">{section.items.map((item) => <li key={item} className="leading-5">{item}</li>)}</ul> : <p className="text-[12px] text-subtle">None detected.</p>}</div>; })}</div> : <div className="border-y py-6 text-center text-[12px] text-subtle">Process meeting audio to generate the summary.</div>}
           </section>
           <section>
             <h2 className="mb-3 text-[16px] font-semibold">Recordings</h2>
