@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { failMeetingProcessing, finishMeetingProcessing, getSetting, startMeetingProcessing, type DetectedAction, type MeetingSummary } from "@/lib/db";
+import { failMeetingProcessing, finishMeetingProcessing, getSetting, startMeetingProcessing, type DetectedAction, type DocumentSection, type MeetingSummary } from "@/lib/db";
 
 const execFileAsync = promisify(execFile);
 const TYPHOON_AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".flac", ".ogg", ".opus"]);
@@ -11,11 +11,32 @@ export type ProcessingResult =
   | { status: "completed"; actions: number; assigned: number }
   | { status: "failed"; error: string };
 
+function pythonRuntime() {
+  const projectRoot = process.env.SARANOTE_PROJECT_ROOT || path.resolve(process.cwd(), "..");
+  return {
+    projectRoot,
+    python: process.env.SARANOTE_PYTHON || path.join(projectRoot, ".venv", "bin", "python"),
+  };
+}
+
+export async function extractDocumentSections(documentPath: string): Promise<DocumentSection[]> {
+  const { projectRoot, python } = pythonRuntime();
+  const { stdout } = await execFileAsync(
+    python,
+    ["-m", "src.documents.presentation", documentPath],
+    { cwd: projectRoot, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
+  );
+  const rows = JSON.parse(stdout) as Array<{ location?: unknown; text?: unknown }>;
+  if (!Array.isArray(rows)) throw new Error("Document extraction returned invalid data.");
+  return rows
+    .filter((row) => typeof row.location === "string" && typeof row.text === "string")
+    .map((row) => ({ location: row.location as string, text: row.text as string }));
+}
+
 export async function processMeetingAudio(meetingId: number, audioPath: string, createdBy: number): Promise<ProcessingResult> {
   startMeetingProcessing(meetingId);
   try {
-    const projectRoot = process.env.SARANOTE_PROJECT_ROOT || path.resolve(process.cwd(), "..");
-    const python = process.env.SARANOTE_PYTHON || path.join(projectRoot, ".venv", "bin", "python");
+    const { projectRoot, python } = pythonRuntime();
     const typhoonApiKey = getSetting("typhoon_api_key") || process.env.TYPHOON_API_KEY;
     const transcriptionPath = TYPHOON_AUDIO_EXTENSIONS.has(path.extname(audioPath).toLowerCase()) ? audioPath : `${audioPath}.wav`;
     let stdout: string;

@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { currentUser } from "@/lib/auth";
 import { addFile, getMeeting, uploadsDirectory } from "@/lib/db";
 import { canAccessMeeting } from "@/lib/domain";
-import { processMeetingAudio, type ProcessingResult } from "@/lib/meeting-processing";
+import { extractDocumentSections, processMeetingAudio, type ProcessingResult } from "@/lib/meeting-processing";
 
 export const runtime = "nodejs";
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
@@ -38,7 +38,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   await mkdir(uploadsDirectory, { recursive: true });
   await writeFile(destination, new Uint8Array(await file.arrayBuffer()));
   try {
-    const id = addFile({ meetingId, taskId: null, originalName, storedName, mimeType: file.type || "application/octet-stream", kind, size: file.size, uploadedBy: user.id });
+    const documentSections = kind === "document" && [".pdf", ".pptx"].includes(extension)
+      ? await extractDocumentSections(destination)
+      : [];
+    const id = addFile({ meetingId, taskId: null, originalName, storedName, mimeType: file.type || "application/octet-stream", kind, size: file.size, uploadedBy: user.id, documentSections });
     let processing: ProcessingResult | undefined;
     if (kind === "audio") {
       processing = await processMeetingAudio(meetingId, destination, user.id);
@@ -47,6 +50,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return Response.json({ id, processing }, { status: 201 });
   } catch (error) {
     await unlink(destination).catch(() => undefined);
-    throw error;
+    const message = kind === "document" && [".pdf", ".pptx"].includes(extension)
+      ? "The document could not be read. Check that the PDF or PowerPoint contains selectable text."
+      : error instanceof Error ? error.message : "Upload failed.";
+    return Response.json({ error: message }, { status: 422 });
   }
 }

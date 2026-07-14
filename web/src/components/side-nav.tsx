@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ClipboardCheck, FileAudio, ListTodo, Settings, Users } from "lucide-react";
+import { ClipboardCheck, FileAudio, ListTodo, Search, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { UserRole } from "@/lib/domain";
 
@@ -13,6 +13,7 @@ const links: ReadonlyArray<{
   roles: readonly UserRole[];
 }> = [
   { href: "/meetings", label: "Meetings", icon: FileAudio, roles: ["manager", "team_leader", "team_member"] },
+  { href: "/search", label: "Search", icon: Search, roles: ["manager", "team_leader", "team_member"] },
   { href: "/work", label: "My work", icon: ListTodo, roles: ["manager", "team_leader", "team_member"] },
   { href: "/review", label: "Review", icon: ClipboardCheck, roles: ["manager", "team_leader"] },
   { href: "/team", label: "Team", icon: Users, roles: ["manager", "team_leader", "team_member"] },

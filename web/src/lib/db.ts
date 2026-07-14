@@ -2,6 +2,7 @@ import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { canAccessMeeting, canManageTeam, isMeetingParticipant, resolveSpokenOwner, type MeetingAccessRule, type MeetingAudience, type SpecialtyTeam, type TaskStatus, type UserRole } from "@/lib/domain";
+import type { WorkspaceSearchEntry } from "@/lib/workspace-search";
 
 export type User = {
   id: number;
@@ -61,7 +62,10 @@ export type StoredFile = {
   size: number;
   createdAt: string;
   uploadedByName: string;
+  documentSections: DocumentSection[];
 };
+
+export type DocumentSection = { location: string; text: string };
 
 export type Task = {
   id: number;
@@ -188,6 +192,10 @@ function getDatabase(): Database.Database {
   if (!meetingColumnNames.has("processing_status")) instance.exec("ALTER TABLE meetings ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'idle'");
   if (!meetingColumnNames.has("processing_error")) instance.exec("ALTER TABLE meetings ADD COLUMN processing_error TEXT NOT NULL DEFAULT ''");
   if (!meetingColumnNames.has("summary_json")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'");
+  const fileColumnNames = new Set(
+    (instance.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>).map((column) => column.name),
+  );
+  if (!fileColumnNames.has("document_sections")) instance.exec("ALTER TABLE files ADD COLUMN document_sections TEXT NOT NULL DEFAULT '[]'");
   instance.exec(`
     INSERT OR IGNORE INTO meeting_access_rules (meeting_id, team, audience, audience_user_id)
     SELECT id, team, audience, audience_user_id FROM meetings WHERE team IS NOT NULL
@@ -456,10 +464,10 @@ export function updateMeetingTeam(id: number, team: SpecialtyTeam): void {
   })();
 }
 
-export function addFile(input: Omit<StoredFile, "id" | "createdAt" | "uploadedByName"> & { uploadedBy: number }): number {
+export function addFile(input: Omit<StoredFile, "id" | "createdAt" | "uploadedByName" | "documentSections"> & { uploadedBy: number; documentSections?: DocumentSection[] }): number {
   const result = prepare(
-    `INSERT INTO files (meeting_id, task_id, original_name, stored_name, mime_type, kind, size, uploaded_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO files (meeting_id, task_id, original_name, stored_name, mime_type, kind, size, uploaded_by, created_at, document_sections)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     input.meetingId,
     input.taskId,
@@ -470,27 +478,44 @@ export function addFile(input: Omit<StoredFile, "id" | "createdAt" | "uploadedBy
     input.size,
     input.uploadedBy,
     new Date().toISOString(),
+    JSON.stringify(input.documentSections ?? []),
   );
   return Number(result.lastInsertRowid);
 }
 
 export function listMeetingFiles(meetingId: number): StoredFile[] {
-  return prepare(
+  const rows = prepare(
     `SELECT f.id, f.meeting_id AS meetingId, f.task_id AS taskId, f.original_name AS originalName,
       f.stored_name AS storedName, f.mime_type AS mimeType, f.kind, f.size,
-      f.created_at AS createdAt, u.name AS uploadedByName
+      f.created_at AS createdAt, u.name AS uploadedByName, f.document_sections AS documentSectionsJson
      FROM files f JOIN users u ON u.id = f.uploaded_by
      WHERE f.meeting_id = ? AND f.kind != 'submission' ORDER BY f.created_at DESC`,
-  ).all(meetingId) as StoredFile[];
+  ).all(meetingId) as Array<Omit<StoredFile, "documentSections"> & { documentSectionsJson: string }>;
+  return rows.map(({ documentSectionsJson, ...file }) => {
+    try {
+      const sections = JSON.parse(documentSectionsJson);
+      return { ...file, documentSections: Array.isArray(sections) ? sections : [] };
+    } catch {
+      return { ...file, documentSections: [] };
+    }
+  });
 }
 
 export function getStoredFile(id: number): StoredFile | undefined {
-  return prepare(
+  const row = prepare(
     `SELECT f.id, f.meeting_id AS meetingId, f.task_id AS taskId, f.original_name AS originalName,
       f.stored_name AS storedName, f.mime_type AS mimeType, f.kind, f.size,
-      f.created_at AS createdAt, u.name AS uploadedByName
+      f.created_at AS createdAt, u.name AS uploadedByName, f.document_sections AS documentSectionsJson
      FROM files f JOIN users u ON u.id = f.uploaded_by WHERE f.id = ?`,
-  ).get(id) as StoredFile | undefined;
+  ).get(id) as (Omit<StoredFile, "documentSections"> & { documentSectionsJson: string }) | undefined;
+  if (!row) return undefined;
+  const { documentSectionsJson, ...file } = row;
+  try {
+    const sections = JSON.parse(documentSectionsJson);
+    return { ...file, documentSections: Array.isArray(sections) ? sections : [] };
+  } catch {
+    return { ...file, documentSections: [] };
+  }
 }
 
 export function createTask(input: {
@@ -558,6 +583,31 @@ export function listTasksForReview(viewer: Pick<User, "id" | "role" | "team">): 
     return tasks.filter((task) => canAccessMeeting(viewer.role, viewer.team, viewer.id, getMeeting(task.meetingId)?.accessRules ?? []));
   }
   return prepare(`${sql} ORDER BY t.updated_at`).all() as Task[];
+}
+
+export function listWorkspaceSearchEntries(viewer: Pick<User, "id" | "role" | "team">): WorkspaceSearchEntry[] {
+  const entries: WorkspaceSearchEntry[] = [];
+  for (const meeting of listMeetings(viewer)) {
+    for (const line of meeting.transcript.split("\n")) {
+      const match = line.trim().match(/^\[([^\]]+)]\s*(.+)$/);
+      if (match) entries.push({ source: "transcript", meetingId: meeting.id, meetingTitle: meeting.title, location: match[1], text: match[2] });
+      else if (line.trim()) entries.push({ source: "transcript", meetingId: meeting.id, meetingTitle: meeting.title, location: "Transcript", text: line.trim() });
+    }
+    for (const text of meeting.summary.decisions) {
+      entries.push({ source: "decision", meetingId: meeting.id, meetingTitle: meeting.title, location: "Decision", text });
+    }
+    for (const file of listMeetingFiles(meeting.id)) {
+      if (file.kind !== "document") continue;
+      for (const section of file.documentSections) {
+        entries.push({ source: "document", meetingId: meeting.id, meetingTitle: meeting.title, location: `${file.originalName} · ${section.location}`, text: section.text });
+      }
+    }
+    for (const task of listMeetingTasks(meeting.id)) {
+      const due = task.dueAt ? ` Due ${task.dueAt}.` : "";
+      entries.push({ source: "assignment", meetingId: meeting.id, meetingTitle: meeting.title, location: task.assigneeName, text: `${task.title}. Assigned to ${task.assigneeName}.${due}`.trim(), searchText: task.description });
+    }
+  }
+  return entries;
 }
 
 export function submitTask(id: number, submissionText: string): void {

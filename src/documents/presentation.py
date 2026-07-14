@@ -1,3 +1,5 @@
+import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -81,10 +83,7 @@ def _evidence_rows(filename: str, location_type: str, pages: list[str]) -> list[
 
 
 if __name__ == "__main__":
-    assert _evidence_rows("slides.pdf", "page", ["Budget plan", "", "Action items"])[1] == {
-        "source": "presentation",
-        "filename": "slides.pdf",
-        "location": "page-03",
-        "text": "Action items",
-    }
-    print("presentation loader self-check passed")
+    parser = argparse.ArgumentParser(description="Extract searchable text from a PDF or PPTX file.")
+    parser.add_argument("path", type=Path)
+    args = parser.parse_args()
+    print(json.dumps(load_presentation(args.path), ensure_ascii=False))
