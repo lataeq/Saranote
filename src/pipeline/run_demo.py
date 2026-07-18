@@ -24,6 +24,8 @@ DEFAULT_CONFIG = {
     "typhoon_model": "typhoon-asr-realtime",
     "typhoon_api_base_url": "https://api.opentyphoon.ai/v1",
     "typhoon_api_key_env": "TYPHOON_API_KEY",
+    "gemini_model": "gemini-3.1-flash-lite",
+    "gemini_api_key_env": "GEMINI_API_KEY",
     "sample_rate": 16000,
     "chunk_seconds": 10.0,
     "overlap_seconds": 0.0,
@@ -43,6 +45,7 @@ AUDIO_MIME_TYPES = {
     ".ogg": "audio/ogg",
     ".opus": "audio/opus",
 }
+SUMMARY_KEYS = ("decisions", "risks", "important_points")
 
 
 DEMO_ROWS = [
@@ -132,9 +135,18 @@ def run_demo_from_rows(
     }
 
 
-def process_meeting_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def process_meeting_rows(
+    rows: list[dict[str, Any]],
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     cleaned_rows = clean_transcript_rows(rows)
+    gemini_summary = None
+    if config and config.get("gemini_model"):
+        cleaned_rows, gemini_summary = refine_meeting_with_gemini(cleaned_rows, config)
     action_items = extract_action_items(cleaned_rows)
+    summary = extract_meeting_summary(cleaned_rows, action_items)
+    if gemini_summary is not None:
+        summary = {**gemini_summary, "follow_ups": summary["follow_ups"]}
     return {
         "cleaned_rows": cleaned_rows,
         "transcript": "\n".join(
@@ -142,8 +154,121 @@ def process_meeting_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for row in cleaned_rows
         ),
         "action_items": action_items,
-        "summary": extract_meeting_summary(cleaned_rows, action_items),
+        "summary": summary,
     }
+
+
+def refine_meeting_with_gemini(
+    rows: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+    import httpx
+
+    api_key_env = str(config["gemini_api_key_env"])
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise SystemExit(f"Set {api_key_env} before using Gemini transcript refinement.")
+
+    prompt = """แก้ไข transcript การประชุมภาษาไทยอย่างระมัดระวัง
+- แก้เฉพาะคำผิดจาก ASR การเว้นวรรค และเครื่องหมายวรรคตอนโดยอาศัยบริบท
+- รักษาความหมายเดิม ห้ามเพิ่ม ลบ สรุป หรือคาดเดาข้อมูล
+- คง English technical terms เมื่อบริบทบ่งชี้ชัดเจน และห้ามประดิษฐ์ชื่อบุคคล
+- คืน cleaned_rows ให้มีจำนวน ลำดับ และ timestamp ตรงกับ input ทุกประการ
+- สร้าง summary ภาษาไทยจากข้อมูลที่ปรากฏจริงเท่านั้น ไม่เกินหมวดละ 4 ข้อ และใช้ [] เมื่อไม่มีข้อมูล
+
+Transcript JSON:
+""" + json.dumps(
+        [{"timestamp": str(row.get("timestamp", "")), "text": str(row.get("text", ""))} for row in rows],
+        ensure_ascii=False,
+    )
+    response = httpx.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{config['gemini_model']}:generateContent",
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseJsonSchema": _gemini_response_schema(),
+            },
+        },
+        timeout=120,
+    )
+    if response.is_error:
+        try:
+            message = str(response.json().get("error", {}).get("message", ""))
+        except (TypeError, ValueError):
+            message = response.text
+        raise RuntimeError(f"Gemini cleanup failed: {message or f'HTTP {response.status_code}'}")
+
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise RuntimeError("Gemini cleanup returned an invalid response.") from error
+    return _parse_gemini_result(payload, rows)
+
+
+def _gemini_response_schema() -> dict[str, Any]:
+    summary_properties = {
+        key: {"type": "array", "items": {"type": "string"}, "maxItems": 4}
+        for key in SUMMARY_KEYS
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "cleaned_rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"timestamp": {"type": "string"}, "text": {"type": "string"}},
+                    "required": ["timestamp", "text"],
+                    "additionalProperties": False,
+                },
+            },
+            "summary": {
+                "type": "object",
+                "properties": summary_properties,
+                "required": list(SUMMARY_KEYS),
+                "additionalProperties": False,
+            },
+        },
+        "required": ["cleaned_rows", "summary"],
+        "additionalProperties": False,
+    }
+
+
+def _parse_gemini_result(
+    payload: Any,
+    source_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+    try:
+        parts = payload["candidates"][0]["content"]["parts"]
+        result = json.loads(next(part["text"] for part in parts if isinstance(part.get("text"), str)))
+        returned_rows = result["cleaned_rows"]
+        returned_summary = result["summary"]
+    except (KeyError, IndexError, StopIteration, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError("Gemini cleanup returned an invalid result.") from error
+
+    if not isinstance(returned_rows, list) or len(returned_rows) != len(source_rows):
+        raise RuntimeError("Gemini cleanup changed the transcript row count.")
+
+    cleaned_rows = []
+    for source, returned in zip(source_rows, returned_rows, strict=True):
+        if not isinstance(returned, dict) or returned.get("timestamp") != str(source.get("timestamp", "")):
+            raise RuntimeError("Gemini cleanup changed a transcript timestamp.")
+        text = returned.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("Gemini cleanup returned an empty transcript row.")
+        cleaned_rows.append({**source, "text": text.strip()})
+
+    if not isinstance(returned_summary, dict):
+        raise RuntimeError("Gemini cleanup returned an invalid meeting summary.")
+    summary = {}
+    for key in SUMMARY_KEYS:
+        items = returned_summary.get(key)
+        if not isinstance(items, list) or len(items) > 4 or any(not isinstance(item, str) or not item.strip() for item in items):
+            raise RuntimeError("Gemini cleanup returned an invalid meeting summary.")
+        summary[key] = [item.strip() for item in items]
+    return cleaned_rows, summary
 
 
 def transcribe_audio(audio_path: Path, config: dict[str, Any]) -> list[dict[str, str]]:
@@ -344,7 +469,7 @@ def main() -> None:
         raise SystemExit("Provide --audio path/to/audio.wav or use --demo for the built-in sample.")
 
     if args.process:
-        result = process_meeting_rows(rows)
+        result = process_meeting_rows(rows, config)
     else:
         if not args.question:
             raise SystemExit("Provide --question unless --process is used.")
