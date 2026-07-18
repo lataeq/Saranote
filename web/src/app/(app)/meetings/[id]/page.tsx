@@ -62,7 +62,7 @@ export default async function MeetingPage({
         </div>
       </header>
 
-      {summarySent ? <Alert><AlertDescription>Meeting summary emailed to {emailRecipients}.</AlertDescription></Alert> : null}
+      {summarySent ? <Alert><AlertDescription>{summarySent === "duplicate" ? "This unchanged meeting summary was already emailed." : `Meeting summary emailed to ${emailRecipients}.`}</AlertDescription></Alert> : null}
       {summaryError ? <Alert variant="destructive"><AlertDescription>{summaryError}</AlertDescription></Alert> : null}
 
       <Tabs defaultValue="overview">

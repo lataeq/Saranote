@@ -192,6 +192,7 @@ function getDatabase(): Database.Database {
   if (!meetingColumnNames.has("processing_status")) instance.exec("ALTER TABLE meetings ADD COLUMN processing_status TEXT NOT NULL DEFAULT 'idle'");
   if (!meetingColumnNames.has("processing_error")) instance.exec("ALTER TABLE meetings ADD COLUMN processing_error TEXT NOT NULL DEFAULT ''");
   if (!meetingColumnNames.has("summary_json")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'");
+  if (!meetingColumnNames.has("summary_email_fingerprint")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_email_fingerprint TEXT NOT NULL DEFAULT ''");
   const fileColumnNames = new Set(
     (instance.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>).map((column) => column.name),
   );
@@ -399,6 +400,14 @@ export function getMeeting(id: number): Meeting | undefined {
 
 export function updateMeetingTranscript(id: number, transcript: string): void {
   prepare("UPDATE meetings SET transcript = ? WHERE id = ?").run(transcript, id);
+}
+
+export function meetingSummaryEmailWasSent(id: number, fingerprint: string): boolean {
+  return Boolean(prepare("SELECT 1 FROM meetings WHERE id = ? AND summary_email_fingerprint = ?").get(id, fingerprint));
+}
+
+export function markMeetingSummaryEmailSent(id: number, fingerprint: string): void {
+  prepare("UPDATE meetings SET summary_email_fingerprint = ? WHERE id = ?").run(fingerprint, id);
 }
 
 export function startMeetingProcessing(id: number): void {

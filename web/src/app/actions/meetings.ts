@@ -1,5 +1,6 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { revalidatePath } from "next/cache";
@@ -15,6 +16,8 @@ import {
   getTask,
   getUser,
   listUsers,
+  markMeetingSummaryEmailSent,
+  meetingSummaryEmailWasSent,
   reviewTask,
   updateMeetingTeam,
   updateMeetingTranscript,
@@ -141,6 +144,21 @@ export async function sendMeetingSummaryEmailAction(formData: FormData): Promise
   }
 
   const appBaseUrl = process.env.SARANOTE_APP_BASE_URL?.replace(/\/+$/, "");
+  const delivery = {
+    meeting: {
+      id: meeting.id,
+      title: meeting.title,
+      heldAt: meeting.heldAt,
+      url: appBaseUrl ? `${appBaseUrl}/meetings/${meeting.id}` : null,
+      transcript: meeting.transcript,
+    },
+    recipients,
+  };
+  const fingerprint = createHash("sha256").update(JSON.stringify(delivery)).digest("hex");
+  if (meetingSummaryEmailWasSent(meeting.id, fingerprint)) {
+    redirect(`/meetings/${meetingId}?summarySent=duplicate`);
+  }
+
   try {
     const response = await fetch(webhookUrl, {
       method: "POST",
@@ -152,14 +170,7 @@ export async function sendMeetingSummaryEmailAction(formData: FormData): Promise
         event: "meeting.summary_send_requested",
         requestedAt: new Date().toISOString(),
         requestedBy: { name: manager.name, email: manager.email },
-        meeting: {
-          id: meeting.id,
-          title: meeting.title,
-          heldAt: meeting.heldAt,
-          url: appBaseUrl ? `${appBaseUrl}/meetings/${meeting.id}` : null,
-          transcript: meeting.transcript,
-        },
-        recipients,
+        ...delivery,
       }),
       signal: AbortSignal.timeout(60_000),
     });
@@ -168,6 +179,7 @@ export async function sendMeetingSummaryEmailAction(formData: FormData): Promise
     redirect(`/meetings/${meetingId}?summaryError=n8n+could+not+send+the+meeting-summary+email.`);
   }
 
+  markMeetingSummaryEmailSent(meeting.id, fingerprint);
   redirect(`/meetings/${meetingId}?summarySent=1`);
 }
 
