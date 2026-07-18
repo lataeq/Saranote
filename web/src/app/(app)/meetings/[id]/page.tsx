@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowLeft, Calendar, CheckCircle2, Download, File, FileA
 import { sendMeetingSummaryEmailAction, updateTranscriptAction } from "@/app/actions/meetings";
 import { DeleteFileButton } from "@/components/delete-file-button";
 import { MeetingCapture } from "@/components/meeting-capture";
+import { SummaryEmailSubmitButton } from "@/components/summary-email-submit-button";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskDialog } from "@/components/task-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { requireUser } from "@/lib/auth";
 import { getMeeting, listMeetingFiles, listMeetingTasks, listUsers } from "@/lib/db";
-import { canAccessMeeting, canManageTeam, meetingAudienceLabel, meetingParticipants, roleLabel, teamLabel } from "@/lib/domain";
+import { canAccessMeeting, canManageTeam, meetingAudienceLabel, meetingParticipants, teamLabel } from "@/lib/domain";
 import { formatBytes, formatDate, formatDateTime } from "@/lib/format";
 
 export default async function MeetingPage({
@@ -46,7 +47,7 @@ export default async function MeetingPage({
     { label: "งานที่ต้องติดตาม", icon: ListChecks, items: meeting.summary.follow_ups },
   ];
   const hasSummary = summarySections.some((section) => section.items.length);
-  const emailRecipients = users.map((member) => `${member.name} (${roleLabel(member.role)})`).join(", ");
+  const emailRecipients = users.map((member) => `${member.name} (${member.email})`).join(", ");
 
   return (
     <div className="space-y-6">
@@ -62,7 +63,7 @@ export default async function MeetingPage({
         </div>
       </header>
 
-      {summarySent ? <Alert><AlertDescription>{summarySent === "duplicate" ? "This unchanged meeting summary was already emailed." : `Meeting summary emailed to ${emailRecipients}.`}</AlertDescription></Alert> : null}
+      {summarySent ? <Alert className={summarySent === "duplicate" ? "border-amber-300 bg-amber-50 text-amber-950" : "border-emerald-300 bg-emerald-50 text-emerald-950"}>{summarySent === "duplicate" ? <AlertTriangle className="size-4" /> : <CheckCircle2 className="size-4" />}<AlertDescription className={summarySent === "duplicate" ? "text-amber-900" : "text-emerald-900"}>{summarySent === "duplicate" ? "Already sent — this meeting summary and recipient list have not changed." : `Sent successfully to ${emailRecipients}.`}</AlertDescription></Alert> : null}
       {summaryError ? <Alert variant="destructive"><AlertDescription>{summaryError}</AlertDescription></Alert> : null}
 
       <Tabs defaultValue="overview">
@@ -82,8 +83,9 @@ export default async function MeetingPage({
           <section>
             <div className="mb-3 flex items-center justify-between gap-3">
               <h2 className="text-[16px] font-semibold">สรุปการประชุม</h2>
-              {meeting.transcript && user.role === "manager" ? <form action={sendMeetingSummaryEmailAction}><input type="hidden" name="meetingId" value={meeting.id} /><Button type="submit" variant="outline" size="sm"><Mail className="size-4" /> Email participants</Button></form> : null}
+              {meeting.transcript && user.role === "manager" ? <form action={sendMeetingSummaryEmailAction}><input type="hidden" name="meetingId" value={meeting.id} /><SummaryEmailSubmitButton /></form> : null}
             </div>
+            {meeting.summaryEmailSentAt ? <div className="mb-3 flex gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-950"><Mail className="mt-0.5 size-4 shrink-0" /><div><p className="text-[13px] font-medium">Last emailed {formatDateTime(meeting.summaryEmailSentAt)}</p><p className="mt-0.5 text-[12px] text-emerald-800">To: {meeting.summaryEmailRecipients.join(", ")}</p></div></div> : null}
             {hasSummary ? <div className="grid border-y sm:grid-cols-2">{summarySections.map((section, index) => { const Icon = section.icon; return <div key={section.label} className={`p-4 ${index > 1 ? "border-t" : ""} ${index % 2 ? "sm:border-l" : ""} ${index === 1 ? "border-t sm:border-t-0" : ""}`}><div className="mb-2 flex items-center gap-2"><Icon className="size-4 text-subtle" /><h3 className="text-[13px] font-medium">{section.label}</h3></div>{section.items.length ? <ul className="space-y-2 text-default">{section.items.map((item) => <li key={item} className="leading-5">{item}</li>)}</ul> : <p className="text-[12px] text-subtle">None detected.</p>}</div>; })}</div> : <div className="border-y py-6 text-center text-[12px] text-subtle">Process meeting audio to generate the summary.</div>}
           </section>
           <section>

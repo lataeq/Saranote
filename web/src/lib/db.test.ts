@@ -78,8 +78,10 @@ describe("meeting summary email delivery", () => {
     });
 
     expect(db.meetingSummaryEmailWasSent(meetingId, "version-1")).toBe(false);
-    db.markMeetingSummaryEmailSent(meetingId, "version-1");
+    db.markMeetingSummaryEmailSent(meetingId, "version-1", ["Member (member@example.com)"]);
     expect(db.meetingSummaryEmailWasSent(meetingId, "version-1")).toBe(true);
     expect(db.meetingSummaryEmailWasSent(meetingId, "version-2")).toBe(false);
+    expect(db.getMeeting(meetingId)?.summaryEmailRecipients).toEqual(["Member (member@example.com)"]);
+    expect(db.getMeeting(meetingId)?.summaryEmailSentAt).not.toBe("");
   });
 });

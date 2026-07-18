@@ -29,6 +29,8 @@ export type Meeting = {
   summary: MeetingSummary;
   processingStatus: "idle" | "processing" | "completed" | "failed";
   processingError: string;
+  summaryEmailSentAt: string;
+  summaryEmailRecipients: string[];
   createdAt: string;
   createdByName: string;
   fileCount: number;
@@ -193,6 +195,8 @@ function getDatabase(): Database.Database {
   if (!meetingColumnNames.has("processing_error")) instance.exec("ALTER TABLE meetings ADD COLUMN processing_error TEXT NOT NULL DEFAULT ''");
   if (!meetingColumnNames.has("summary_json")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'");
   if (!meetingColumnNames.has("summary_email_fingerprint")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_email_fingerprint TEXT NOT NULL DEFAULT ''");
+  if (!meetingColumnNames.has("summary_email_sent_at")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_email_sent_at TEXT NOT NULL DEFAULT ''");
+  if (!meetingColumnNames.has("summary_email_recipients")) instance.exec("ALTER TABLE meetings ADD COLUMN summary_email_recipients TEXT NOT NULL DEFAULT '[]'");
   const fileColumnNames = new Set(
     (instance.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>).map((column) => column.name),
   );
@@ -318,12 +322,13 @@ function meetingAccessRules(meetingId: number): MeetingAccessRule[] {
   ).all(meetingId) as MeetingAccessRule[];
 }
 
-type StoredMeeting = Omit<Meeting, "accessRules" | "extractedActions" | "summary"> & { extractedActionsJson: string; summaryJson: string };
+type StoredMeeting = Omit<Meeting, "accessRules" | "extractedActions" | "summary" | "summaryEmailRecipients"> & { extractedActionsJson: string; summaryJson: string; summaryEmailRecipientsJson: string };
 
 function hydrateMeeting(row: StoredMeeting): Meeting {
-  const { extractedActionsJson, summaryJson, ...meeting } = row;
+  const { extractedActionsJson, summaryJson, summaryEmailRecipientsJson, ...meeting } = row;
   let extractedActions: DetectedAction[] = [];
   let summary: MeetingSummary = { decisions: [], risks: [], important_points: [], follow_ups: [] };
+  let summaryEmailRecipients: string[] = [];
   try {
     const parsed = JSON.parse(extractedActionsJson);
     if (Array.isArray(parsed)) extractedActions = parsed as DetectedAction[];
@@ -337,7 +342,11 @@ function hydrateMeeting(row: StoredMeeting): Meeting {
       follow_ups: Array.isArray(parsed.follow_ups) ? parsed.follow_ups : [],
     };
   } catch {}
-  return { ...meeting, accessRules: meetingAccessRules(row.id), extractedActions, summary };
+  try {
+    const parsed = JSON.parse(summaryEmailRecipientsJson);
+    if (Array.isArray(parsed)) summaryEmailRecipients = parsed.map(String);
+  } catch {}
+  return { ...meeting, accessRules: meetingAccessRules(row.id), extractedActions, summary, summaryEmailRecipients };
 }
 
 export function createMeeting(input: {
@@ -368,6 +377,7 @@ export function listMeetings(viewer: Pick<User, "id" | "role" | "team">, search 
       m.team, m.audience, m.audience_user_id AS audienceUserId, au.name AS audienceUserName,
       m.extracted_actions AS extractedActionsJson, m.processing_status AS processingStatus,
       m.processing_error AS processingError, m.summary_json AS summaryJson,
+      m.summary_email_sent_at AS summaryEmailSentAt, m.summary_email_recipients AS summaryEmailRecipientsJson,
       m.created_at AS createdAt, u.name AS createdByName,
       COUNT(DISTINCT f.id) AS fileCount, COUNT(DISTINCT t.id) AS taskCount
      FROM meetings m JOIN users u ON u.id = m.created_by
@@ -387,6 +397,7 @@ export function getMeeting(id: number): Meeting | undefined {
       m.team, m.audience, m.audience_user_id AS audienceUserId, au.name AS audienceUserName,
       m.extracted_actions AS extractedActionsJson, m.processing_status AS processingStatus,
       m.processing_error AS processingError, m.summary_json AS summaryJson,
+      m.summary_email_sent_at AS summaryEmailSentAt, m.summary_email_recipients AS summaryEmailRecipientsJson,
       m.created_at AS createdAt, u.name AS createdByName,
       COUNT(DISTINCT f.id) AS fileCount, COUNT(DISTINCT t.id) AS taskCount
      FROM meetings m JOIN users u ON u.id = m.created_by
@@ -406,8 +417,9 @@ export function meetingSummaryEmailWasSent(id: number, fingerprint: string): boo
   return Boolean(prepare("SELECT 1 FROM meetings WHERE id = ? AND summary_email_fingerprint = ?").get(id, fingerprint));
 }
 
-export function markMeetingSummaryEmailSent(id: number, fingerprint: string): void {
-  prepare("UPDATE meetings SET summary_email_fingerprint = ? WHERE id = ?").run(fingerprint, id);
+export function markMeetingSummaryEmailSent(id: number, fingerprint: string, recipients: string[]): void {
+  prepare("UPDATE meetings SET summary_email_fingerprint = ?, summary_email_sent_at = ?, summary_email_recipients = ? WHERE id = ?")
+    .run(fingerprint, new Date().toISOString(), JSON.stringify(recipients), id);
 }
 
 export function startMeetingProcessing(id: number): void {

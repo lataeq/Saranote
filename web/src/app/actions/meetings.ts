@@ -179,7 +179,7 @@ export async function sendMeetingSummaryEmailAction(formData: FormData): Promise
     redirect(`/meetings/${meetingId}?summaryError=n8n+could+not+send+the+meeting-summary+email.`);
   }
 
-  markMeetingSummaryEmailSent(meeting.id, fingerprint);
+  markMeetingSummaryEmailSent(meeting.id, fingerprint, recipients.map(({ name, email }) => `${name} (${email})`));
   redirect(`/meetings/${meetingId}?summarySent=1`);
 }
 
