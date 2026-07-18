@@ -1,0 +1,162 @@
+{
+  "name": "Saranote - Send scheduled task reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [1, 2, 3, 4, 5],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "id": "ba9648a8-c35b-4a6f-9e3f-df8a8057f85a",
+      "name": "Weekday Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-480, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.SARANOTE_APP_BASE_URL || 'http://127.0.0.1:3000').replace(/\\\/+$/, '') + '/api/automation/tasks' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "442dd37d-54d7-45ac-9ca7-1249c33760ca",
+      "name": "Fetch Open Assignments",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-240, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const tasks = Array.isArray($json.tasks) ? $json.tasks : [];\nconst now = new Date();\nconst dateParts = Object.fromEntries(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now).map(({ type, value }) => [type, value]));\nconst reminderDate = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;\nconst endOfToday = new Date(`${reminderDate}T23:59:59.999+07:00`);\nconst reminders = new Map();\n\nfor (const item of tasks) {\n  const email = String(item?.assignee?.email ?? '').trim().toLowerCase();\n  const dueAt = new Date(item?.task?.dueAt);\n  if (!email.includes('@') || Number.isNaN(dueAt.valueOf()) || dueAt > endOfToday) continue;\n  const reminder = reminders.get(email) ?? { email, name: String(item.assignee.name ?? '').trim() || email, tasks: [] };\n  reminder.tasks.push({\n    title: String(item.task.title ?? '').trim() || 'Untitled assignment',\n    meeting: String(item.meeting?.title ?? '').trim(),\n    dueAt,\n    url: String(item.task.url ?? '').trim(),\n  });\n  reminders.set(email, reminder);\n}\n\nconst escapeHtml = (value) => String(value ?? '').replace(/[&<>\"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[character]);\nreturn [...reminders.values()].map(({ email, name, tasks }) => {\n  tasks.sort((left, right) => left.dueAt - right.dueAt);\n  const items = tasks.map((task) => {\n    const due = task.dueAt.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' });\n    const status = task.dueAt < now ? 'เกินกำหนด' : 'ครบกำหนดวันนี้';\n    const meeting = task.meeting ? ` · ${escapeHtml(task.meeting)}` : '';\n    const link = /^https?:\\/\\//i.test(task.url) ? ` · <a href=\"${escapeHtml(task.url)}\">เปิดงาน</a>` : '';\n    return `<li><strong>${escapeHtml(task.title)}</strong>${meeting}<br>${status}: ${escapeHtml(due)}${link}</li>`;\n  }).join('');\n  return { json: { eventKey: `task-reminder:${reminderDate}:${email}`, email, subject: `[Saranote] ${tasks.length} งานต้องติดตาม`, html: `<div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#222\"><p>เรียน ${escapeHtml(name)}</p><p>งานต่อไปนี้ครบกำหนดวันนี้หรือเกินกำหนดแล้ว:</p><ul>${items}</ul><p style=\"color:#666;font-size:12px\">ข้อความแจ้งเตือนอัตโนมัติจาก Saranote</p></div>` } };\n});"
+      },
+      "id": "e719007f-a33a-4816-95c4-189f2a38a46d",
+      "name": "Prepare Reminders",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH reserved AS (\n  INSERT INTO automation_delivery_log (event_key, workflow, recipient, status)\n  VALUES ($1, 'task-reminder', $2, 'processing')\n  ON CONFLICT (event_key) DO UPDATE\n  SET status = 'processing', updated_at = NOW(), sent_at = NULL, error_message = NULL\n  WHERE automation_delivery_log.status = 'failed'\n     OR (automation_delivery_log.status = 'processing' AND automation_delivery_log.updated_at < NOW() - INTERVAL '30 minutes')\n  RETURNING event_key\n)\nSELECT\n  EXISTS (SELECT 1 FROM reserved) AS reserved,\n  $1::text AS event_key,\n  $2::text AS email,\n  $3::text AS subject,\n  $4::text AS html;",
+        "options": {
+          "queryReplacement": "={{ [$json.eventKey, $json.email, $json.subject, $json.html] }}"
+        }
+      },
+      "id": "298b2635-7478-4ac8-ae1a-e81068737538",
+      "name": "Reserve Delivery",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4df4473a-d6fa-4c9c-afb3-70b873df472f",
+              "leftValue": "={{ $json.reserved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "cc755366-3ba6-4ed4-9d9c-bfbc74fc0f80",
+      "name": "Is New Delivery",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [480, 0]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Saranote"
+        }
+      },
+      "id": "8fe4a70c-8612-43a6-ad9d-b94c52b9f5c4",
+      "name": "Send Reminder with Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [720, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE automation_delivery_log\nSET\n  status = CASE WHEN $2 = '' THEN 'sent' ELSE 'failed' END,\n  updated_at = NOW(),\n  sent_at = CASE WHEN $2 = '' THEN NOW() ELSE NULL END,\n  error_message = NULLIF($2, '')\nWHERE event_key = $1\nRETURNING event_key, status, sent_at, error_message;",
+        "options": {
+          "queryReplacement": "={{ [$('Reserve Delivery').item.json.event_key, $json.error?.message ?? $json.error ?? ''] }}"
+        }
+      },
+      "id": "514c1873-03fc-47fe-8f9a-e214aec7f1f2",
+      "name": "Record Delivery Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [960, 0]
+    }
+  ],
+  "connections": {
+    "Weekday Schedule": {
+      "main": [[{ "node": "Fetch Open Assignments", "type": "main", "index": 0 }]]
+    },
+    "Fetch Open Assignments": {
+      "main": [[{ "node": "Prepare Reminders", "type": "main", "index": 0 }]]
+    },
+    "Prepare Reminders": {
+      "main": [[{ "node": "Reserve Delivery", "type": "main", "index": 0 }]]
+    },
+    "Reserve Delivery": {
+      "main": [[{ "node": "Is New Delivery", "type": "main", "index": 0 }]]
+    },
+    "Is New Delivery": {
+      "main": [[{ "node": "Send Reminder with Gmail", "type": "main", "index": 0 }], []]
+    },
+    "Send Reminder with Gmail": {
+      "main": [
+        [{ "node": "Record Delivery Result", "type": "main", "index": 0 }],
+        [{ "node": "Record Delivery Result", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Bangkok",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "active": false
+}

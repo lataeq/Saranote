@@ -21,9 +21,11 @@ export function TaskSubmissionForm({ taskId, defaultText }: { taskId: number; de
     setMessage(null);
     try {
       const response = await fetch(`/api/tasks/${taskId}/submit`, { method: "POST", body: new FormData(event.currentTarget) });
-      const result = (await response.json()) as { error?: string };
+      const result = (await response.json()) as { error?: string; notification?: "not_configured" | "sent" | "failed" };
       if (!response.ok) throw new Error(result.error || "Submission failed.");
-      setMessage("Work submitted for manager review.");
+      setMessage(result.notification === "failed"
+        ? "Work submitted, but the reviewer notification could not be queued."
+        : "Work submitted for manager review.");
       router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Submission failed.");
