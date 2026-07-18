@@ -86,6 +86,50 @@ configs/                Runtime model and processing configuration
 
 The web server stores users, meetings, access rules, files, and assignments in a local SQLite database. Audio processing calls the Python pipeline, while uploaded files and generated state remain outside Git.
 
+### n8n meeting-summary email
+
+Managers can send a processed meeting summary to every invited participant through n8n. Saranote sends the Typhoon transcript, participant names and spoken-name aliases to n8n. Gemini 3.1 Flash-Lite corrects ASR errors and creates one structured summary per meeting. Each Gmail message contains the summary followed by the full corrected transcript. Raw audio remains in Saranote, and the original transcript is preserved for review.
+
+Import the workflow and start n8n:
+
+```bash
+n8n import:workflow --input=n8n/send-meeting-summary-email.json
+n8n import:workflow --input=n8n/send-task-reminders.json
+n8n start
+```
+
+In n8n, create a **Header Auth** credential with the header name `x-saranote-secret` and a long random value. Select it on the **Saranote Webhook** and **Fetch Open Assignments** nodes. Select a Google Gemini API credential on **Clean and Summarize with Gemini**, and select a Gmail OAuth credential on both Gmail nodes. Test each workflow manually, then activate it.
+
+The scheduled reminder workflow also uses PostgreSQL to prevent duplicate email deliveries and keep their status. Create the table once in the n8n PostgreSQL database:
+
+```sql
+CREATE TABLE automation_delivery_log (
+  event_key TEXT PRIMARY KEY,
+  workflow TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('processing', 'sent', 'failed')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  sent_at TIMESTAMPTZ,
+  error_message TEXT
+);
+```
+
+Create one **Postgres** credential in n8n and select it on **Reserve Delivery** and **Record Delivery Result**. The workflow reserves one reminder per recipient and Bangkok calendar date before Gmail runs. Existing `sent` rows are skipped, while failed or stale processing rows can be retried. Keep the database password only in n8n credentials, not in the workflow JSON or Git.
+
+Run the web app with the matching secret and production webhook URL:
+
+```bash
+export N8N_MEETING_SUMMARY_WEBHOOK_URL="http://127.0.0.1:5678/webhook/saranote/meeting-summary"
+export N8N_TASK_SUBMITTED_WEBHOOK_URL="http://127.0.0.1:5678/webhook/saranote/task-submitted"
+export SARANOTE_N8N_WEBHOOK_SECRET="replace-with-the-same-secret"
+export SARANOTE_APP_BASE_URL="http://localhost:3000"
+```
+
+The **Email participants** button appears when a meeting has a transcript. Recipients are derived from the meeting access rules. The transcript is sent to Gemini only after a manager requests the email.
+
+The task-reminder workflow runs Monday through Friday at 08:30 in the `Asia/Bangkok` timezone. It reads open assignments from `GET /api/automation/tasks` with the same `x-saranote-secret` header, selects tasks due today or overdue, and sends one Gmail message per assignee. Saranote also sends an `assignment.submitted` event to the task-submitted webhook after an employee submits work; the payload contains reviewer addresses but not the attached file contents.
+
 ## Evaluation
 
 Saved notebook results currently record:
@@ -113,13 +157,14 @@ Current automated verification:
 
 - Python 3.11 or newer
 - Node.js 22
+- PostgreSQL 14 or newer for n8n delivery logging
 - `ffmpeg` for browser-recorded audio conversion
 - Poppler `pdftotext` for PDF extraction
 
 On Debian or Ubuntu:
 
 ```bash
-sudo apt install ffmpeg poppler-utils
+sudo apt install ffmpeg poppler-utils postgresql
 ```
 
 ### Python environment
