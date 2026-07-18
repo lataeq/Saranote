@@ -1,8 +1,8 @@
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { canAccessMeeting, canManageTeam, isMeetingParticipant, resolveSpokenOwner, type MeetingAccessRule, type MeetingAudience, type SpecialtyTeam, type TaskStatus, type UserRole } from "@/lib/domain";
-import type { WorkspaceSearchEntry } from "@/lib/workspace-search";
+import { canAccessMeeting, canManageTeam, formatActionFollowUps, isMeetingParticipant, resolveSpokenOwner, type MeetingAccessRule, type MeetingAudience, type SpecialtyTeam, type TaskStatus, type UserRole } from "./domain";
+import type { WorkspaceSearchEntry } from "./workspace-search";
 
 export type User = {
   id: number;
@@ -407,10 +407,11 @@ export function startMeetingProcessing(id: number): void {
 
 export function finishMeetingProcessing(id: number, transcript: string, actions: DetectedAction[], summary: MeetingSummary, createdBy: number): number {
   const resolvedActions = resolveActionOwners(actions);
+  const resolvedSummary = { ...summary, follow_ups: formatActionFollowUps(resolvedActions) };
   return getDatabase().transaction(() => {
     prepare(
       "UPDATE meetings SET transcript = ?, extracted_actions = ?, summary_json = ?, processing_status = 'completed', processing_error = '' WHERE id = ?",
-    ).run(transcript, JSON.stringify(resolvedActions), JSON.stringify(summary), id);
+    ).run(transcript, JSON.stringify(resolvedActions), JSON.stringify(resolvedSummary), id);
     const meeting = getMeeting(id);
     const creator = getUser(createdBy);
     if (!meeting || !creator) return 0;
@@ -516,6 +517,10 @@ export function getStoredFile(id: number): StoredFile | undefined {
   } catch {
     return { ...file, documentSections: [] };
   }
+}
+
+export function deleteStoredFile(id: number): boolean {
+  return prepare("DELETE FROM files WHERE id = ?").run(id).changes === 1;
 }
 
 export function createTask(input: {

@@ -1,19 +1,25 @@
 "use server";
 
+import { unlink } from "node:fs/promises";
+import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireManager, requireWorkManager } from "@/lib/auth";
 import {
   createMeeting,
   createTask,
+  deleteStoredFile,
   deleteTask,
   getMeeting,
+  getStoredFile,
   getTask,
   getUser,
+  listUsers,
   reviewTask,
   updateMeetingTeam,
   updateMeetingTranscript,
   updateTask,
+  uploadsDirectory,
 } from "@/lib/db";
 import {
   canAccessMeeting,
@@ -22,6 +28,7 @@ import {
   isMeetingParticipant,
   isReviewDecision,
   isSpecialtyTeam,
+  meetingParticipants,
   type MeetingAccessRule,
 } from "@/lib/domain";
 
@@ -39,6 +46,10 @@ export async function createMeetingAction(formData: FormData): Promise<void> {
   const title = field(formData, "title");
   const heldAt = field(formData, "heldAt");
   if (!title || !heldAt) redirect("/meetings?error=Meeting+title+and+date+are+required.");
+  const meetingDate = new Date(heldAt);
+  if (Number.isNaN(meetingDate.valueOf()) || meetingDate.getFullYear() < 2000 || meetingDate.getFullYear() > 2100) {
+    redirect("/meetings?error=Choose+a+date+between+2000+and+2100.");
+  }
 
   let accessRules: MeetingAccessRule[] = [];
   if (manager.role === "manager") {
@@ -67,7 +78,7 @@ export async function createMeetingAction(formData: FormData): Promise<void> {
 
   const id = createMeeting({
     title,
-    heldAt: new Date(heldAt).toISOString(),
+    heldAt: meetingDate.toISOString(),
     accessRules,
     createdBy: manager.id,
   });
@@ -87,6 +98,77 @@ export async function updateTranscriptAction(formData: FormData): Promise<void> 
   updateMeetingTranscript(meetingId, transcript);
   revalidatePath(`/meetings/${meetingId}`);
   revalidatePath("/meetings");
+}
+
+export async function deleteMeetingFileAction(formData: FormData): Promise<void> {
+  const manager = await requireWorkManager();
+  const file = getStoredFile(positiveId(formData.get("fileId")));
+  const meeting = file ? getMeeting(file.meetingId) : undefined;
+  if (
+    !file
+    || file.taskId
+    || file.kind === "submission"
+    || !meeting
+    || !canAccessMeeting(manager.role, manager.team, manager.id, meeting.accessRules)
+  ) return;
+
+  if (deleteStoredFile(file.id)) {
+    await unlink(path.join(uploadsDirectory, file.storedName)).catch(() => undefined);
+    revalidatePath(`/meetings/${meeting.id}`);
+    revalidatePath("/meetings");
+  }
+}
+
+export async function sendMeetingSummaryEmailAction(formData: FormData): Promise<void> {
+  const manager = await requireManager();
+  const meetingId = positiveId(formData.get("meetingId"));
+  const meeting = getMeeting(meetingId);
+  if (!meeting) redirect("/meetings");
+
+  if (!meeting.transcript.trim()) redirect(`/meetings/${meetingId}?summaryError=Process+the+meeting+before+sending+its+summary.`);
+
+  const recipients = meetingParticipants(listUsers(), meeting.accessRules).map(({ name, email, spokenName }) => ({
+    name,
+    email,
+    spokenNames: spokenName.split(/[,;\n]/).map((value) => value.trim()).filter(Boolean),
+  }));
+  if (!recipients.length) redirect(`/meetings/${meetingId}?summaryError=No+meeting+participants+have+an+email+address.`);
+
+  const webhookUrl = process.env.N8N_MEETING_SUMMARY_WEBHOOK_URL;
+  const webhookSecret = process.env.SARANOTE_N8N_WEBHOOK_SECRET;
+  if (!webhookUrl || !webhookSecret) {
+    redirect(`/meetings/${meetingId}?summaryError=n8n+meeting-summary+email+is+not+configured.`);
+  }
+
+  const appBaseUrl = process.env.SARANOTE_APP_BASE_URL?.replace(/\/+$/, "");
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-saranote-secret": webhookSecret,
+      },
+      body: JSON.stringify({
+        event: "meeting.summary_send_requested",
+        requestedAt: new Date().toISOString(),
+        requestedBy: { name: manager.name, email: manager.email },
+        meeting: {
+          id: meeting.id,
+          title: meeting.title,
+          heldAt: meeting.heldAt,
+          url: appBaseUrl ? `${appBaseUrl}/meetings/${meeting.id}` : null,
+          transcript: meeting.transcript,
+        },
+        recipients,
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`n8n returned ${response.status}`);
+  } catch {
+    redirect(`/meetings/${meetingId}?summaryError=n8n+could+not+send+the+meeting-summary+email.`);
+  }
+
+  redirect(`/meetings/${meetingId}?summarySent=1`);
 }
 
 export async function updateMeetingTeamAction(formData: FormData): Promise<void> {

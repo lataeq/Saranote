@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileUp, Mic, RefreshCw, Square, Upload } from "lucide-react";
+import { FileUp, Mic, Pause, Play, RefreshCw, Square, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -16,15 +16,16 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
   const audioInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
   const [recording, setRecording] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
 
   useEffect(() => {
-    if (!recording) return;
+    if (!recording || paused) return;
     const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
-  }, [recording]);
+  }, [paused, recording]);
 
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
@@ -68,7 +69,10 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
       chunksRef.current = [];
       setSeconds(0);
       recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
+      recorder.onpause = () => setPaused(true);
+      recorder.onresume = () => setPaused(false);
       recorder.onstop = async () => {
+        setPaused(false);
         const mime = recorder.mimeType || "audio/webm";
         const blob = new Blob(chunksRef.current, { type: mime });
         stream.getTracks().forEach((track) => track.stop());
@@ -107,6 +111,12 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
     setRecording(false);
   }
 
+  function togglePause() {
+    const recorder = recorderRef.current;
+    if (recorder?.state === "recording") recorder.pause();
+    else if (recorder?.state === "paused") recorder.resume();
+  }
+
   function selectedFile(event: React.ChangeEvent<HTMLInputElement>, kind: UploadKind) {
     const file = event.target.files?.[0];
     if (file) void upload(file, kind);
@@ -117,7 +127,10 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         {recording ? (
-          <Button type="button" variant="destructive" onClick={stopRecording}><Square className="size-3.5 fill-current" /> Stop {String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</Button>
+          <>
+            <Button type="button" variant="outline" onClick={togglePause}>{paused ? <Play className="size-4" /> : <Pause className="size-4" />} {paused ? "Resume" : "Pause"}</Button>
+            <Button type="button" variant="destructive" onClick={stopRecording}><Square className="size-3.5 fill-current" /> Stop {String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</Button>
+          </>
         ) : (
           <Button type="button" variant="outline" onClick={() => void startRecording()} disabled={busy}><Mic className="size-4" /> Start recording</Button>
         )}

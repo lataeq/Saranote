@@ -43,7 +43,7 @@ export function NewMeetingDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="held-at">Date and time</Label>
-            <Input id="held-at" name="heldAt" type="datetime-local" required />
+            <Input id="held-at" name="heldAt" type="datetime-local" min="2000-01-01T00:00" max="2100-12-31T23:59" required />
           </div>
           {role === "manager" ? (
             <>

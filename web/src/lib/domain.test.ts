@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessMeeting, canAccessTeam, canManageTeam, canReview, canSubmitTask, isMeetingParticipant, isReviewDecision, resolveSpokenOwner, taskStatusLabel } from "./domain";
+import { canAccessMeeting, canAccessTeam, canManageTeam, canReview, canSubmitTask, formatActionFollowUps, isMeetingParticipant, isReviewDecision, meetingParticipants, resolveSpokenOwner, taskStatusLabel } from "./domain";
 
 describe("assignment permissions", () => {
   it("only lets managers review", () => {
@@ -30,6 +30,23 @@ describe("assignment permissions", () => {
     expect(isMeetingParticipant("team_member", "sales", 8, [...rules])).toBe(false);
   });
 
+  it("selects only invited participants for meeting email", () => {
+    const rules = [
+      { team: "web_development", audience: "team_leaders", audienceUserId: null },
+      { team: "business_analysis", audience: "specific_user", audienceUserId: 4 },
+    ] as const;
+    const users = [
+      { id: 1, role: "manager", team: null, email: "manager@example.com" },
+      { id: 2, role: "team_leader", team: "web_development", email: "leader@example.com" },
+      { id: 3, role: "team_member", team: "web_development", email: "member@example.com" },
+      { id: 4, role: "team_member", team: "business_analysis", email: "analyst@example.com" },
+    ] as const;
+    expect(meetingParticipants(users, [...rules]).map((user) => user.email)).toEqual([
+      "leader@example.com",
+      "analyst@example.com",
+    ]);
+  });
+
   it("only lets the assignee submit non-approved work", () => {
     expect(canSubmitTask(3, 3, "pending")).toBe(true);
     expect(canSubmitTask(3, 3, "rejected")).toBe(true);
@@ -58,5 +75,11 @@ describe("assignment permissions", () => {
     expect(resolveSpokenOwner("เต้", users)?.name).toBe("Nuttasit P");
     expect(resolveSpokenOwner("tae", users)?.name).toBe("Nuttasit P");
     expect(resolveSpokenOwner("นัทสิทธิ์", users)).toBeUndefined();
+  });
+
+  it("formats follow-ups with the resolved account name", () => {
+    expect(formatActionFollowUps([
+      { owner: "Nuttasit P", task: "เขียนยูนิเทส", deadline: "วันศุกร์" },
+    ])).toEqual(["Nuttasit P: เขียนยูนิเทส (กำหนด วันศุกร์)"]);
   });
 });

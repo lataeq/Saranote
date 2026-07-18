@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AlertTriangle, ArrowLeft, Calendar, CheckCircle2, Download, File, FileAudio, ListChecks, ListTree, UserRound } from "lucide-react";
-import { updateTranscriptAction } from "@/app/actions/meetings";
+import { AlertTriangle, ArrowLeft, Calendar, CheckCircle2, Download, File, FileAudio, ListChecks, ListTree, Mail, UserRound } from "lucide-react";
+import { sendMeetingSummaryEmailAction, updateTranscriptAction } from "@/app/actions/meetings";
+import { DeleteFileButton } from "@/components/delete-file-button";
 import { MeetingCapture } from "@/components/meeting-capture";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskDialog } from "@/components/task-dialog";
@@ -12,11 +13,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { requireUser } from "@/lib/auth";
 import { getMeeting, listMeetingFiles, listMeetingTasks, listUsers } from "@/lib/db";
-import { canAccessMeeting, canManageTeam, isMeetingParticipant, meetingAudienceLabel, teamLabel } from "@/lib/domain";
+import { canAccessMeeting, canManageTeam, meetingAudienceLabel, meetingParticipants, roleLabel, teamLabel } from "@/lib/domain";
 import { formatBytes, formatDate, formatDateTime } from "@/lib/format";
 
-export default async function MeetingPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function MeetingPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ summarySent?: string; summaryError?: string }>;
+}) {
   const user = await requireUser();
+  const { summarySent, summaryError } = await searchParams;
   const meetingId = Number((await params).id);
   if (!Number.isInteger(meetingId) || meetingId < 1) notFound();
   const meeting = getMeeting(meetingId);
@@ -25,23 +33,20 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
   const [files, tasks, users] = [
     listMeetingFiles(meetingId),
     listMeetingTasks(meetingId),
-    listUsers().filter((member) => isMeetingParticipant(
-      member.role,
-      member.team,
-      member.id,
-      meeting.accessRules,
-    ) && (user.role === "manager" || member.team === user.team)),
+    meetingParticipants(listUsers(), meeting.accessRules)
+      .filter((member) => user.role === "manager" || member.team === user.team),
   ];
   const canManage = user.role === "manager" || user.role === "team_leader";
   const audioFiles = files.filter((file) => file.kind === "audio");
   const documents = files.filter((file) => file.kind === "document");
   const summarySections = [
-    { label: "Decisions", icon: CheckCircle2, items: meeting.summary.decisions },
-    { label: "Risks", icon: AlertTriangle, items: meeting.summary.risks },
-    { label: "Important points", icon: ListTree, items: meeting.summary.important_points },
-    { label: "Follow-ups", icon: ListChecks, items: meeting.summary.follow_ups },
+    { label: "มติที่ประชุม", icon: CheckCircle2, items: meeting.summary.decisions },
+    { label: "ความเสี่ยงและปัญหา", icon: AlertTriangle, items: meeting.summary.risks },
+    { label: "ประเด็นสำคัญ", icon: ListTree, items: meeting.summary.important_points },
+    { label: "งานที่ต้องติดตาม", icon: ListChecks, items: meeting.summary.follow_ups },
   ];
   const hasSummary = summarySections.some((section) => section.items.length);
+  const emailRecipients = users.map((member) => `${member.name} (${roleLabel(member.role)})`).join(", ");
 
   return (
     <div className="space-y-6">
@@ -56,6 +61,9 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
           {user.role !== "team_member" ? <MeetingCapture meetingId={meeting.id} canRetry={meeting.processingStatus === "failed" && audioFiles.length > 0} /> : null}
         </div>
       </header>
+
+      {summarySent ? <Alert><AlertDescription>Meeting summary emailed to {emailRecipients}.</AlertDescription></Alert> : null}
+      {summaryError ? <Alert variant="destructive"><AlertDescription>{summaryError}</AlertDescription></Alert> : null}
 
       <Tabs defaultValue="overview">
         <TabsList className="w-full justify-start overflow-x-auto rounded-md bg-[#f5f5f5]">
@@ -72,12 +80,15 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
             <div><p className="text-[12px] text-subtle">Assignments</p><p className="mt-1 font-medium">{tasks.length}</p></div>
           </section>
           <section>
-            <h2 className="mb-3 text-[16px] font-semibold">Meeting summary</h2>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 className="text-[16px] font-semibold">สรุปการประชุม</h2>
+              {meeting.transcript && user.role === "manager" ? <form action={sendMeetingSummaryEmailAction}><input type="hidden" name="meetingId" value={meeting.id} /><Button type="submit" variant="outline" size="sm"><Mail className="size-4" /> Email participants</Button></form> : null}
+            </div>
             {hasSummary ? <div className="grid border-y sm:grid-cols-2">{summarySections.map((section, index) => { const Icon = section.icon; return <div key={section.label} className={`p-4 ${index > 1 ? "border-t" : ""} ${index % 2 ? "sm:border-l" : ""} ${index === 1 ? "border-t sm:border-t-0" : ""}`}><div className="mb-2 flex items-center gap-2"><Icon className="size-4 text-subtle" /><h3 className="text-[13px] font-medium">{section.label}</h3></div>{section.items.length ? <ul className="space-y-2 text-default">{section.items.map((item) => <li key={item} className="leading-5">{item}</li>)}</ul> : <p className="text-[12px] text-subtle">None detected.</p>}</div>; })}</div> : <div className="border-y py-6 text-center text-[12px] text-subtle">Process meeting audio to generate the summary.</div>}
           </section>
           <section>
             <h2 className="mb-3 text-[16px] font-semibold">Recordings</h2>
-            {audioFiles.length ? <div className="space-y-2">{audioFiles.map((file) => <div key={file.id} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center"><FileAudio className="size-4 text-subtle" /><div className="min-w-0 flex-1"><p className="truncate font-medium">{file.originalName}</p><p className="text-[12px] text-subtle">{formatBytes(file.size)} · {file.uploadedByName}</p></div><audio controls preload="metadata" className="h-8 w-full max-w-[340px]" src={`/api/files/${file.id}`} /></div>)}</div> : <div className="rounded-lg border border-dashed p-6 text-center text-[12px] text-subtle">No audio has been recorded or uploaded.</div>}
+            {audioFiles.length ? <div className="space-y-2">{audioFiles.map((file) => <div key={file.id} className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center"><FileAudio className="size-4 text-subtle" /><div className="min-w-0 flex-1"><p className="truncate font-medium">{file.originalName}</p><p className="text-[12px] text-subtle">{formatBytes(file.size)} · {file.uploadedByName}</p></div><audio controls preload="metadata" className="h-8 w-full max-w-[340px]" src={`/api/files/${file.id}`} />{canManage ? <DeleteFileButton fileId={file.id} fileName={file.originalName} /> : null}</div>)}</div> : <div className="rounded-lg border border-dashed p-6 text-center text-[12px] text-subtle">No audio has been recorded or uploaded.</div>}
           </section>
         </TabsContent>
 
@@ -95,7 +106,7 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
 
         <TabsContent value="files" className="mt-5">
           <div className="mb-3"><h2 className="text-[16px] font-semibold">Meeting documents</h2><p className="mt-1 text-[12px] text-subtle">PDF, PowerPoint, Word, and text files imported for this meeting.</p></div>
-          {documents.length ? <div className="overflow-hidden rounded-lg border">{documents.map((file, index) => <div key={file.id} className={`flex items-center gap-3 p-3 ${index ? "border-t" : ""}`}><File className="size-4 text-subtle" /><div className="min-w-0 flex-1"><p className="truncate font-medium">{file.originalName}</p><p className="text-[12px] text-subtle">{formatBytes(file.size)} · {file.uploadedByName}</p></div><Button asChild variant="ghost" size="icon-sm"><a href={`/api/files/${file.id}`} aria-label={`Download ${file.originalName}`}><Download className="size-4" /></a></Button></div>)}</div> : <div className="rounded-lg border border-dashed p-6 text-center text-[12px] text-subtle">No documents imported.</div>}
+          {documents.length ? <div className="overflow-hidden rounded-lg border">{documents.map((file, index) => <div key={file.id} className={`flex items-center gap-3 p-3 ${index ? "border-t" : ""}`}><File className="size-4 text-subtle" /><div className="min-w-0 flex-1"><p className="truncate font-medium">{file.originalName}</p><p className="text-[12px] text-subtle">{formatBytes(file.size)} · {file.uploadedByName}</p></div><Button asChild variant="ghost" size="icon-sm"><a href={`/api/files/${file.id}`} aria-label={`Download ${file.originalName}`}><Download className="size-4" /></a></Button>{canManage ? <DeleteFileButton fileId={file.id} fileName={file.originalName} /> : null}</div>)}</div> : <div className="rounded-lg border border-dashed p-6 text-center text-[12px] text-subtle">No documents imported.</div>}
         </TabsContent>
 
         <TabsContent value="actions" className="mt-5">

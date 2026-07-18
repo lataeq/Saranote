@@ -54,6 +54,19 @@ export function isMeetingParticipant(
   });
 }
 
+export function meetingParticipants<T extends { id: number; role: UserRole; team: SpecialtyTeam | null }>(
+  users: readonly T[],
+  rules: MeetingAccessRule[],
+): T[] {
+  return users.filter((user) => isMeetingParticipant(user.role, user.team, user.id, rules));
+}
+
+export function formatActionFollowUps(
+  actions: readonly { owner: string; task: string; deadline: string | null }[],
+): string[] {
+  return actions.map(({ owner, task, deadline }) => `${owner}: ${task}${deadline ? ` (กำหนด ${deadline})` : ""}`);
+}
+
 export function canAccessMeeting(
   role: UserRole,
   userTeam: SpecialtyTeam | null,
