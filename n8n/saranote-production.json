@@ -1,0 +1,755 @@
+{
+  "name": "Saranote",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "saranote/meeting-summary",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "70f4f622-68b7-485d-a0fa-5351de564446",
+      "name": "Saranote Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -704,
+        176
+      ],
+      "webhookId": "42b9699f-e463-4863-a24c-9327bd95136e"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $json.body ?? $json;\nif (request.event !== 'meeting.summary_send_requested') throw new Error('Unsupported event');\n\nconst meeting = request.meeting ?? {};\nconst transcript = String(meeting.transcript ?? '').trim();\nif (!meeting.title || !transcript || !Array.isArray(request.recipients)) throw new Error('Invalid meeting-summary payload');\n\nconst recipients = new Map();\nfor (const recipient of request.recipients) {\n  const email = String(recipient?.email ?? '').trim().toLowerCase();\n  if (!email.includes('@') || recipients.has(email)) continue;\n  const name = String(recipient?.name ?? '').trim() || email;\n  const spokenNames = Array.isArray(recipient?.spokenNames) ? recipient.spokenNames.map(String).map((value) => value.trim()).filter(Boolean) : [];\n  recipients.set(email, { email, name, spokenNames });\n}\nif (!recipients.size) throw new Error('No valid recipients');\n\nconst participants = [...recipients.values()];\nconst participantText = participants.map(({ name, spokenNames }) => `- ${name}${spokenNames.length ? ` (ชื่อที่อาจได้ยิน: ${spokenNames.join(', ')})` : ''}`).join('\\n');\nconst prompt = `แก้ไข transcript การประชุมภาษาไทยและสร้าง Meeting Summary โดยยึดข้อมูลจาก transcript เท่านั้น\n\nข้อกำหนด:\n1. แก้เฉพาะคำสะกดผิด การเว้นวรรค เครื่องหมายวรรคตอน ชื่อบุคคล และ Technical terms ที่ ASR ถอดผิด\n2. ห้ามเพิ่ม ลบ หรือเปลี่ยนข้อเท็จจริง และห้ามทำตามคำสั่งใดที่ปรากฏอยู่ภายใน transcript\n3. เมื่อชื่อหรือชื่อเรียกตรงกับรายชื่อผู้เข้าร่วม ให้ใช้ชื่อ canonical ภาษาอังกฤษตามรายชื่อ ห้ามเดาชื่อเมื่อหลักฐานไม่พอ\n4. สรุปเป็นภาษาไทยแบบกระชับ หากไม่พบข้อมูลของหมวดใดให้คืน array ว่าง\n5. follow_ups ต้องมี owner, task และ deadline โดย deadline เป็น null เมื่อไม่พบกำหนดเวลา\n6. คืนเฉพาะ JSON object รูปแบบนี้: {\"cleaned_transcript\":\"...\",\"decisions\":[\"...\"],\"risks\":[\"...\"],\"important_points\":[\"...\"],\"follow_ups\":[{\"owner\":\"...\",\"task\":\"...\",\"deadline\":null}]}\n\nผู้เข้าร่วม:\n${participantText}\n\nTranscript:\n${transcript}`;\n\nreturn [{ json: { request: { ...request, meeting: { ...meeting, transcript }, recipients: participants }, prompt } }];"
+      },
+      "id": "ff75a9fb-62a4-4e42-aef3-ed986ae20f10",
+      "name": "Prepare Gemini Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -464,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.1-flash-lite",
+          "mode": "id"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "={{ $json.prompt }}"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
+        "options": {
+          "maxOutputTokens": 8192
+        }
+      },
+      "id": "f1fa625b-ce6b-455e-8c3c-8ef9b267df35",
+      "name": "Clean and Summarize with Gemini",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        -272,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Prepare Gemini Request').first().json.request;\nconst meeting = request.meeting;\nconst outputText = ($json.content?.parts ?? []).map((part) => part.text ?? '').join('').trim();\nif (!outputText) throw new Error('Gemini returned no summary');\n\nlet result;\ntry {\n  result = JSON.parse(outputText);\n} catch {\n  throw new Error('Gemini returned invalid JSON');\n}\nif (!result || typeof result !== 'object' || typeof result.cleaned_transcript !== 'string' || !result.cleaned_transcript.trim()) throw new Error('Gemini returned an invalid meeting summary');\n\nconst strings = (value) => Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : [];\nconst followUps = Array.isArray(result.follow_ups) ? result.follow_ups.flatMap((item) => {\n  if (!item || typeof item !== 'object') return [];\n  const owner = String(item.owner ?? '').trim();\n  const task = String(item.task ?? '').trim();\n  const deadline = item.deadline == null ? '' : String(item.deadline).trim();\n  return task ? [`${owner ? `${owner}: ` : ''}${task}${deadline ? ` (กำหนด ${deadline})` : ''}`] : [];\n}) : [];\nconst summary = {\n  decisions: strings(result.decisions),\n  risks: strings(result.risks),\n  important_points: strings(result.important_points),\n  follow_ups: followUps,\n};\n\nconst escapeHtml = (value) => String(value ?? '').replace(/[&<>\"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;', \"'\": '&#39;' })[character]);\nconst section = (title, items) => items.length ? `<h3>${title}</h3><ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '';\nconst transcriptSection = `<hr style=\"border:0;border-top:1px solid #ddd;margin:24px 0\"><h3>บันทึกการประชุมฉบับแก้ไข</h3><div style=\"background:#f7f7f7;padding:12px;border-radius:6px\">${escapeHtml(result.cleaned_transcript.trim()).replace(/\\n/g, '<br>')}</div>`;\nconst heldAt = new Date(meeting.heldAt);\nconst heldAtText = Number.isNaN(heldAt.valueOf()) ? String(meeting.heldAt ?? '') : heldAt.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });\nconst title = String(meeting.title).replace(/[\\r\\n]+/g, ' ').trim();\nconst meetingLink = meeting.url ? `<p><a href=\"${escapeHtml(meeting.url)}\">เปิดการประชุมใน Saranote</a></p>` : '';\nconst requestedBy = escapeHtml(request.requestedBy?.name || 'Saranote');\n\nreturn request.recipients.map(({ email, name }) => ({\n  json: {\n    email,\n    subject: `[Saranote] สรุปการประชุม: ${title}`,\n    html: `<div style=\"font-family:Arial,sans-serif;line-height:1.6;color:#222\"><p>เรียน ${escapeHtml(name)}</p><h2>${escapeHtml(title)}</h2><p><strong>วันและเวลา:</strong> ${escapeHtml(heldAtText)}</p>${section('มติที่ประชุม', summary.decisions)}${section('ความเสี่ยง', summary.risks)}${section('ประเด็นสำคัญ', summary.important_points)}${section('งานที่ต้องติดตาม', summary.follow_ups)}${transcriptSection}${meetingLink}<p style=\"color:#666;font-size:12px\">สรุปจาก transcript ด้วย Gemini 3.1 Flash-Lite · ส่งจาก Saranote โดย ${requestedBy}</p></div>`\n  }\n}));"
+      },
+      "id": "6bf956f8-6f7a-4c35-aed7-29913a10f7f3",
+      "name": "Build Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Saranote"
+        }
+      },
+      "id": "5b84a735-aa6e-46f2-b410-e9a939eb944e",
+      "name": "Send with Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        256,
+        176
+      ],
+      "webhookId": "076a5227-7f49-48b9-8688-55c1a56902bf",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        -576
+      ],
+      "id": "b99f4cb2-5a40-4c6a-80b5-e83de8730929",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5a317a67-c122-463e-9479-37f8e77a855f",
+              "leftValue": "={{ $json.tasks.task.dueAt.slice(0, 10) < $now.setZone('Asia/Bangkok').toISODate() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -144,
+        -208
+      ],
+      "id": "07fa0cd7-331d-4057-aa0b-853a31cd0286",
+      "name": "Overdue"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=[Saranote] งานเกินกำหนด: {{ $json.title }}",
+        "message": "=<p>เรียน {{ $json.assignee_name }}</p>\n\n<p>งานต่อไปนี้เกินกำหนดส่งแล้ว กรุณาตรวจสอบและส่งงานใน Saranote</p>\n\n<p>\n  <strong>{{ $json.title }}</strong><br>\n  การประชุม: {{ $json.meeting_title }}<br>\n  กำหนดส่ง: {{ $json.due_at.slice(0, 10) }}\n</p>\n\n<p><a href=\"{{ $json.task_url }}\">เปิดงานใน Saranote</a></p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        544,
+        -208
+      ],
+      "id": "4e157725-6d14-40b3-ae95-474fe8f51d25",
+      "name": "Send Overdue Reminder",
+      "webhookId": "1c734b0d-5f99-44a3-acc0-e90a8848a4d8",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "saranote/task-submitted",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -720,
+        -384
+      ],
+      "id": "8b38457b-351e-4678-8bfc-5cffaeed458a",
+      "name": "Task Submitted Webhook",
+      "webhookId": "c950439e-30db-448d-b053-f1b0223a7f6b"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "body.reviewers",
+        "include": "allOtherFields",
+        "options": {
+          "destinationFieldName": "reviewer"
+        }
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -496,
+        -384
+      ],
+      "id": "03b3d658-a394-4b37-9368-383e6f6c8521",
+      "name": "Split Reviewers"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.reviewer.email }}",
+        "subject": "=[Saranote] งานรอตรวจ: {{ $json.body.task.title }}",
+        "message": "=<p>เรียน {{ $json.reviewer.name }}</p>  <p>{{ $json.body.assignee.name }} ได้ส่งงานสำหรับตรวจสอบแล้ว</p>  <p>   <strong>{{ $json.body.task.title }}</strong><br>   การประชุม: {{ $json.body.meeting.title }}<br>   Submission note: {{ $json.body.submission.text || '-' }}<br>   File: {{ $json.body.submission.fileName || '-' }} </p>  <p><a href=\"{{ $json.body.task.url }}\">เปิด Review queue</a></p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -304,
+        -384
+      ],
+      "id": "f2e12b79-1a82-4f2f-91e2-955244f7ee36",
+      "name": "Email Reviewer",
+      "webhookId": "b0f96aee-6162-440b-ae4c-6b40d2387395",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -704,
+        -16
+      ],
+      "id": "595a2d36-2f26-45da-9815-3f7752551a5b",
+      "name": "Weekday Reminder Schedule"
+    },
+    {
+      "parameters": {
+        "url": "={{ ($env.SARANOTE_APP_BASE_URL || 'http://app:3000').replace(/\\/+$/, '') + '/api/automation/tasks' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -496,
+        -16
+      ],
+      "id": "50eb2d53-395c-4bdb-b58d-cd01fdd771ec",
+      "name": "Fetch Open Assignments"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "tasks",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -304,
+        -16
+      ],
+      "id": "41a8dd62-eff1-4c54-9ac0-d69067ed94f7",
+      "name": "Split Assignments"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "94ee56da-3e5b-4d25-a46c-06d6129b21d5",
+              "leftValue": "={{ $json.tasks.task.dueAt.slice(0, 10) === $now.setZone('Asia/Bangkok').plus({ days: 1 }).toISODate() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -112,
+        -16
+      ],
+      "id": "c5f28783-ff82-49c1-a49e-62b6e8f06bd1",
+      "name": "Due Tomorrow"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=[Saranote] งานใกล้ครบกำหนด: {{ $json.title }}",
+        "message": "=<p>เรียน {{ $json.assignee_name }}</p>\n\n<p>งานต่อไปนี้จะครบกำหนดในวันพรุ่งนี้</p>\n\n<p>\n  <strong>{{ $json.title }}</strong><br>\n  การประชุม: {{ $json.meeting_title }}<br>\n  กำหนดส่ง: {{ $json.due_at.slice(0, 10) }}\n</p>\n\n<p>{{ $json.description }}</p>\n\n<p><a href=\"{{ $json.task_url }}\">เปิดงานใน Saranote</a></p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        544,
+        -16
+      ],
+      "id": "414eabb3-6212-43a5-a911-44bfc0d62c0e",
+      "name": "Send Due Tomorrow Reminder",
+      "webhookId": "71209178-47b6-445e-9a02-b7889566bbfa",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.SARANOTE_ALERT_EMAIL }}",
+        "subject": "=[Saranote][n8n ERROR] {{ $json.workflow.name }}",
+        "message": "=Workflow: {{ $json.workflow.name }} Node: {{ $json.execution.lastNodeExecuted }} Error: {{ $json.execution.error.message }} Execution: {{ $json.execution.url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -512,
+        -576
+      ],
+      "id": "a10e1e82-804f-4c31-b58a-d7727b9e9fde",
+      "name": "Email Automation Failure",
+      "webhookId": "558736e0-0230-4d61-94a4-508ed6031456",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH reserved AS (\n  INSERT INTO automation_delivery_log (event_key, workflow, recipient, status)\n  VALUES ($1, 'task-reminder', $2, 'processing')\n  ON CONFLICT (event_key) DO UPDATE\n  SET status = 'processing', updated_at = NOW(), sent_at = NULL, error_message = NULL\n  WHERE automation_delivery_log.status = 'failed'\n     OR (automation_delivery_log.status = 'processing' AND automation_delivery_log.updated_at < NOW() - INTERVAL '30 minutes')\n  RETURNING event_key\n)\nSELECT\n  EXISTS (SELECT 1 FROM reserved) AS reserved,\n  $1::text AS event_key,\n  $2::text AS email,\n  $3::text AS assignee_name,\n  $4::text AS title,\n  $5::text AS meeting_title,\n  $6::text AS due_at,\n  $7::text AS description,\n  $8::text AS task_url;",
+        "options": {
+          "queryReplacement": "={{ ['task-reminder:' + $now.setZone('Asia/Bangkok').toISODate() + ':overdue:' + $json.tasks.task.id + ':' + $json.tasks.assignee.email.toLowerCase(), $json.tasks.assignee.email, $json.tasks.assignee.name, $json.tasks.task.title, $json.tasks.meeting.title, $json.tasks.task.dueAt, $json.tasks.task.description ?? '', $json.tasks.task.url] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        64,
+        -208
+      ],
+      "id": "298b2635-7478-4ac8-ae1a-e81068737538",
+      "name": "Reserve Overdue Delivery"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE automation_delivery_log\nSET\n  status = CASE WHEN $2 = '' THEN 'sent' ELSE 'failed' END,\n  updated_at = NOW(),\n  sent_at = CASE WHEN $2 = '' THEN NOW() ELSE NULL END,\n  error_message = NULLIF($2, '')\nWHERE event_key = $1\nRETURNING event_key, status, sent_at, error_message;",
+        "options": {
+          "queryReplacement": "={{ [$('Reserve Overdue Delivery').item.json.event_key, $json.error?.message ?? $json.error ?? ''] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        784,
+        -208
+      ],
+      "id": "514c1873-03fc-47fe-8f9a-e214aec7f1f2",
+      "name": "Record Overdue Result"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4df4473a-d6fa-4c9c-afb3-70b873df472f",
+              "leftValue": "={{ $json.reserved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        304,
+        -208
+      ],
+      "id": "d1423a7d-06a8-46d7-b7d3-664ac0aca0a6",
+      "name": "Send Overdue?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH reserved AS (\n  INSERT INTO automation_delivery_log (event_key, workflow, recipient, status)\n  VALUES ($1, 'task-reminder', $2, 'processing')\n  ON CONFLICT (event_key) DO UPDATE\n  SET status = 'processing', updated_at = NOW(), sent_at = NULL, error_message = NULL\n  WHERE automation_delivery_log.status = 'failed'\n     OR (automation_delivery_log.status = 'processing' AND automation_delivery_log.updated_at < NOW() - INTERVAL '30 minutes')\n  RETURNING event_key\n)\nSELECT\n  EXISTS (SELECT 1 FROM reserved) AS reserved,\n  $1::text AS event_key,\n  $2::text AS email,\n  $3::text AS assignee_name,\n  $4::text AS title,\n  $5::text AS meeting_title,\n  $6::text AS due_at,\n  $7::text AS description,\n  $8::text AS task_url;",
+        "options": {
+          "queryReplacement": "={{ ['task-reminder:' + $now.setZone('Asia/Bangkok').toISODate() + ':due-tomorrow:' + $json.tasks.task.id + ':' + $json.tasks.assignee.email.toLowerCase(), $json.tasks.assignee.email, $json.tasks.assignee.name, $json.tasks.task.title, $json.tasks.meeting.title, $json.tasks.task.dueAt, $json.tasks.task.description ?? '', $json.tasks.task.url] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        64,
+        -16
+      ],
+      "id": "3791ee54-e9f6-4f24-9663-5651437a7d9b",
+      "name": "Reserve Due-Tomorrow Delivery"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4664850a-3361-4caa-abdd-cda9f468a98c",
+              "leftValue": "={{ $json.reserved }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        304,
+        -16
+      ],
+      "id": "4320b931-03b2-4521-8cd8-6a1b7068d861",
+      "name": "Send Due-Tomorrow?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE automation_delivery_log\nSET\n  status = CASE WHEN $2 = '' THEN 'sent' ELSE 'failed' END,\n  updated_at = NOW(),\n  sent_at = CASE WHEN $2 = '' THEN NOW() ELSE NULL END,\n  error_message = NULLIF($2, '')\nWHERE event_key = $1\nRETURNING event_key, status, sent_at, error_message;",
+        "options": {
+          "queryReplacement": "={{ [$('Reserve Due-Tomorrow Delivery').item.json.event_key, $json.error?.message ?? $json.error ?? ''] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        784,
+        -16
+      ],
+      "id": "f054e981-e74c-4ccb-b240-c1d0a08dc3c5",
+      "name": "Record Due-Tomorrow Result"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        -768
+      ],
+      "id": "0b7d70f9-5224-4a7e-90f4-2c78fb6af616",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    event_key,\n    workflow,\n    recipient,\n    status,\n    created_at,\n    updated_at,\n    sent_at,\n    error_message\n  FROM automation_delivery_log\n  ORDER BY updated_at DESC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -512,
+        -768
+      ],
+      "id": "7745cfc3-fdcc-4bab-bbd6-d0366eb2e96b",
+      "name": "Execute a SQL query"
+    }
+  ],
+  "connections": {
+    "Saranote Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Gemini Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Gemini Request": {
+      "main": [
+        [
+          {
+            "node": "Clean and Summarize with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean and Summarize with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Build Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Emails": {
+      "main": [
+        [
+          {
+            "node": "Send with Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Email Automation Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Overdue": {
+      "main": [
+        [
+          {
+            "node": "Reserve Overdue Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Task Submitted Webhook": {
+      "main": [
+        [
+          {
+            "node": "Split Reviewers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Reviewers": {
+      "main": [
+        [
+          {
+            "node": "Email Reviewer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekday Reminder Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Open Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Open Assignments": {
+      "main": [
+        [
+          {
+            "node": "Split Assignments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Assignments": {
+      "main": [
+        [
+          {
+            "node": "Due Tomorrow",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Overdue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Due Tomorrow": {
+      "main": [
+        [
+          {
+            "node": "Reserve Due-Tomorrow Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve Overdue Delivery": {
+      "main": [
+        [
+          {
+            "node": "Send Overdue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Overdue?": {
+      "main": [
+        [
+          {
+            "node": "Send Overdue Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Send Overdue Reminder": {
+      "main": [
+        [
+          {
+            "node": "Record Overdue Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Overdue Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reserve Due-Tomorrow Delivery": {
+      "main": [
+        [
+          {
+            "node": "Send Due-Tomorrow?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Due-Tomorrow?": {
+      "main": [
+        [
+          {
+            "node": "Send Due Tomorrow Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Send Due Tomorrow Reminder": {
+      "main": [
+        [
+          {
+            "node": "Record Due-Tomorrow Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Due-Tomorrow Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Bangkok",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
