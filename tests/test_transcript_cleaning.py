@@ -17,10 +17,10 @@ class TranscriptCleaningTest(unittest.TestCase):
         self.assertEqual(clean_transcript_text("มติ เห็นชอบ มติ"), "มติ เห็นชอบ มติ")
 
     def test_clean_transcript_text_fixes_common_meeting_asr_errors(self):
-        text = "โดยรถค่าใช้จ่าย ฝ่ายดำเนื้องานต้องส่งเอกสารงุบประมาณชะบับแก้ไขไพ้ในวันสุข"
+        text = "หน้าล็อกอีน อัพโลดส่ง File PDF ลง SQLไล โดยรถค่าใช้จ่าย ฝ่ายดำเนื้องานต้องส่งเอกสารงุบประมาณชะบับแก้ไขไพ้ในวันสุข"
         self.assertEqual(
             clean_transcript_text(text),
-            "โดยลดค่าใช้จ่าย ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์",
+            "หน้าล็อกอิน อัปโหลดส่ง ไฟล์ PDF ลง SQLite โดยลดค่าใช้จ่าย ฝ่ายดำเนินงานต้องส่งเอกสารงบประมาณฉบับแก้ไขภายในวันศุกร์",
         )
 
     def test_clean_transcript_text_normalizes_decomposed_sara_am(self):
