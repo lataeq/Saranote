@@ -28,7 +28,6 @@ RUN apt-get update \
   && mkdir -p /app/web/data \
   && chown nextjs:nodejs /app/web/data
 
-COPY --from=builder --chown=nextjs:nodejs /build/web/public ./public
 COPY --from=builder --chown=nextjs:nodejs /build/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /build/web/.next/static ./.next/static
 COPY src /app/project/src
