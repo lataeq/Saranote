@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { hasUsers } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 export default async function SetupPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   if (hasUsers()) redirect("/login");
   const { error } = await searchParams;

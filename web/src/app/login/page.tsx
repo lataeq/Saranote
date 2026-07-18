@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { currentUser } from "@/lib/auth";
 import { hasUsers } from "@/lib/db";
 
+export const dynamic = "force-dynamic";
+
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   if (!hasUsers()) redirect("/setup");
   if (await currentUser()) redirect("/meetings");
