@@ -23,9 +23,10 @@ cleaned transcript and meeting evidence
 ### Meeting workspace
 
 - Record audio in the browser or upload an existing recording.
-- Transcribe Thai meeting audio and retry failed processing without uploading again.
+- Save recordings before background transcription and retry failed processing without uploading again.
 - Import PDF and PPTX documents with page or slide citations.
-- Review cleaned transcripts and structured meeting summaries.
+- Preserve the pre-Gemini transcript and review highlighted before/after wording changes.
+- Keep transcripts, summaries, decisions, and assignments hidden until the organizer or delegated reviewer publishes them.
 - Search across transcripts, documents, decisions, and assignments.
 - Return extractive answers linked to the supporting meeting evidence.
 
@@ -34,7 +35,7 @@ cleaned transcript and meeting evidence
 - Detect action items, owners, deadlines, and source transcript ranges.
 - Resolve spoken names and aliases to employee accounts.
 - Create assignments automatically when an owner can be resolved safely.
-- Let managers and team leaders correct, reassign, or delete pending work.
+- Let the meeting reviewer correct, reassign, or cancel pending work before publication.
 - Let employees submit work for approval or revision.
 
 ### Access control
@@ -43,6 +44,8 @@ cleaned transcript and meeting evidence
 - Organizes employees into Web Development, Business Analysis, AI Engineering, and Sales teams.
 - Supports meetings for entire teams, leaders, members, or selected employees.
 - Restricts meetings, files, search results, assignments, and reviews to authorized users.
+- Requires a one-time pilot privacy acknowledgment and a recorded confirmation before every browser recording.
+- Deletes meeting artifacts after 30 days, with one 30-day extension; assignments receive a separate 30-day clock after approval or cancellation.
 
 ## Technical Approach
 
@@ -88,17 +91,18 @@ The web server stores users, meetings, access rules, files, and assignments in a
 
 ### n8n meeting-summary email
 
-Managers can send a processed meeting summary to every invited participant through n8n. Saranote sends the Typhoon transcript, participant names and spoken-name aliases to n8n. Gemini 3.1 Flash-Lite corrects ASR errors and creates one structured summary per meeting. Each Gmail message contains the summary followed by the full corrected transcript. Raw audio remains in Saranote, and the original transcript is preserved for review.
+Typhoon produces the transcript, then Gemini 3.1 Flash-Lite proposes wording corrections and a structured summary. Saranote preserves the pre-Gemini transcript and keeps all generated output in a private draft until review. n8n sends only published summaries, task reminders, and retention notices. During the thesis pilot, every email is routed to one controlled mailbox configured in Settings.
 
 Import the workflow and start n8n:
 
 ```bash
 n8n import:workflow --input=n8n/send-meeting-summary-email.json
 n8n import:workflow --input=n8n/send-task-reminders.json
+n8n import:workflow --input=n8n/send-retention-notices.json
 n8n start
 ```
 
-In n8n, create a **Header Auth** credential with the header name `x-saranote-secret` and a long random value. Select it on the **Saranote Webhook** and **Fetch Open Assignments** nodes. Select a Google Gemini API credential on **Clean and Summarize with Gemini**, and select a Gmail OAuth credential on both Gmail nodes. Test each workflow manually, then activate it.
+In n8n, create a **Header Auth** credential with the header name `x-saranote-secret` and a long random value. Select it on the Saranote webhook and HTTP request nodes. Select the Gmail OAuth credential on every Gmail node. Test each workflow manually, then activate it.
 
 The scheduled reminder workflow also uses PostgreSQL to prevent duplicate email deliveries and keep their status. Create the table once in the n8n PostgreSQL database:
 
@@ -146,8 +150,9 @@ CER is emphasized because Thai text does not consistently use spaces as word bou
 
 Current automated verification:
 
-- 37 Python tests
-- 10 web tests
+- 38 Python tests
+- 22 web tests
+- 5 n8n workflow tests
 - ESLint and production Next.js build
 - npm dependency audit with no reported vulnerabilities at the latest local check
 
@@ -191,10 +196,12 @@ Open [http://localhost:3000](http://localhost:3000). The first visit creates the
 
 The default demo configuration is stored in `configs/final_demo.yaml`.
 
-For the Typhoon experiment, either set the key in the manager Settings page or provide it to the server environment:
+Set the Typhoon and Gemini keys plus the controlled pilot mailbox in the manager Settings page, or provide the keys to the server environment:
 
 ```bash
 export TYPHOON_API_KEY="your-key"
+export GEMINI_API_KEY="your-key"
+export SARANOTE_PILOT_EMAIL_SINK="your-controlled-mailbox@example.com"
 ```
 
 API keys, local databases, uploads, generated transcripts, recordings, datasets, and model checkpoints are excluded from Git.
@@ -236,4 +243,4 @@ npm audit --audit-level=moderate
 
 ## Privacy
 
-Meeting recordings, transcripts, documents, account data, and API credentials are stored locally and excluded from version control. Use only recordings and documents that participants have authorized for processing.
+Meeting recordings, transcripts, documents, account data, and API credentials are stored locally and excluded from version control. This milestone is for fictional, registered-employee thesis data only. Every account accepts the pilot notice once, and the organizer must confirm that participants were informed before each recording.
