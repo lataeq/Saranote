@@ -5,19 +5,25 @@ import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireManager, requireWorkManager } from "@/lib/auth";
+import { requireManager, requireUser, requireWorkManager } from "@/lib/auth";
 import {
   createMeeting,
   createTask,
+  confirmMeetingRecording,
+  delegateMeetingReview,
   deleteStoredFile,
   deleteTask,
   getMeeting,
+  getSetting,
   getStoredFile,
   getTask,
   getUser,
+  extendMeetingRetention,
   listUsers,
   markMeetingSummaryEmailSent,
   meetingSummaryEmailWasSent,
+  publishMeetingOutput,
+  publishMeetingReview,
   reviewTask,
   updateMeetingTeam,
   updateMeetingTranscript,
@@ -42,6 +48,11 @@ function field(formData: FormData, name: string): string {
 function positiveId(value: FormDataEntryValue | null): number {
   const id = Number(value);
   return Number.isInteger(id) && id > 0 ? id : 0;
+}
+
+export async function confirmMeetingRecordingAction(meetingId: number): Promise<boolean> {
+  const organizer = await requireUser();
+  return Number.isInteger(meetingId) && meetingId > 0 && confirmMeetingRecording(meetingId, organizer.id);
 }
 
 export async function createMeetingAction(formData: FormData): Promise<void> {
@@ -89,13 +100,14 @@ export async function createMeetingAction(formData: FormData): Promise<void> {
 }
 
 export async function updateTranscriptAction(formData: FormData): Promise<void> {
-  const manager = await requireWorkManager();
+  const manager = await requireUser();
   const meetingId = positiveId(formData.get("meetingId"));
   const transcript = field(formData, "transcript");
   const meeting = getMeeting(meetingId);
   if (
     !meeting
-    || (manager.role !== "manager" && manager.role !== "team_leader")
+    || meeting.reviewerId !== manager.id
+    || Boolean(meeting.transcriptPublishedAt)
     || !canAccessMeeting(manager.role, manager.team, manager.id, meeting.accessRules)
   ) return;
   updateMeetingTranscript(meetingId, transcript);
@@ -128,11 +140,15 @@ export async function sendMeetingSummaryEmailAction(formData: FormData): Promise
   const meeting = getMeeting(meetingId);
   if (!meeting) redirect("/meetings");
 
+  if (!meeting.transcriptPublishedAt || !meeting.summaryPublishedAt) redirect(`/meetings/${meetingId}?summaryError=Publish+the+reviewed+transcript+and+summary+before+sending+email.`);
   if (!meeting.transcript.trim()) redirect(`/meetings/${meetingId}?summaryError=Process+the+meeting+before+sending+its+summary.`);
 
+  const pilotMailbox = getSetting("pilot_email_sink") || process.env.SARANOTE_PILOT_EMAIL_SINK;
+  if (!pilotMailbox) redirect(`/meetings/${meetingId}?summaryError=Configure+the+controlled+pilot+mailbox+before+sending+email.`);
   const recipients = meetingParticipants(listUsers(), meeting.accessRules).map(({ name, email, spokenName }) => ({
     name,
-    email,
+    email: pilotMailbox,
+    employeeEmail: email,
     spokenNames: spokenName.split(/[,;\n]/).map((value) => value.trim()).filter(Boolean),
   }));
   if (!recipients.length) redirect(`/meetings/${meetingId}?summaryError=No+meeting+participants+have+an+email+address.`);
@@ -195,7 +211,7 @@ export async function updateMeetingTeamAction(formData: FormData): Promise<void>
 }
 
 export async function createTaskAction(formData: FormData): Promise<void> {
-  const manager = await requireWorkManager();
+  const manager = await requireUser();
   const meetingId = positiveId(formData.get("meetingId"));
   const assigneeId = positiveId(formData.get("assigneeId"));
   const title = field(formData, "title");
@@ -204,11 +220,12 @@ export async function createTaskAction(formData: FormData): Promise<void> {
 
   const meeting = getMeeting(meetingId);
   const assignee = getUser(assigneeId);
+  const isDraftReviewer = meeting?.reviewStatus === "draft" && !meeting.assignmentsPublishedAt && meeting.reviewerId === manager.id;
   if (
     !meeting
     || !assignee
     || !title
-    || !canManageTeam(manager.role, manager.team, assignee.team)
+    || (!isDraftReviewer && !canManageTeam(manager.role, manager.team, assignee.team))
     || assignee.role === "manager"
     || !canAccessMeeting(manager.role, manager.team, manager.id, meeting.accessRules)
     || !isMeetingParticipant(
@@ -231,7 +248,7 @@ export async function createTaskAction(formData: FormData): Promise<void> {
 }
 
 export async function updateTaskAction(formData: FormData): Promise<void> {
-  const manager = await requireWorkManager();
+  const manager = await requireUser();
   const taskId = positiveId(formData.get("taskId"));
   const assigneeId = positiveId(formData.get("assigneeId"));
   const title = field(formData, "title");
@@ -240,11 +257,12 @@ export async function updateTaskAction(formData: FormData): Promise<void> {
   const task = getTask(taskId);
   const meeting = task ? getMeeting(task.meetingId) : undefined;
   const assignee = getUser(assigneeId);
+  const isDraftReviewer = meeting?.reviewStatus === "draft" && !meeting.assignmentsPublishedAt && meeting.reviewerId === manager.id;
   if (
     !task || task.status !== "pending" || !meeting || !assignee || !title
     || !canAccessMeeting(manager.role, manager.team, manager.id, meeting.accessRules)
-    || !canManageTeam(manager.role, manager.team, task.assigneeTeam)
-    || !canManageTeam(manager.role, manager.team, assignee.team)
+    || (!isDraftReviewer && !canManageTeam(manager.role, manager.team, task.assigneeTeam))
+    || (!isDraftReviewer && !canManageTeam(manager.role, manager.team, assignee.team))
     || assignee.role === "manager"
     || !isMeetingParticipant(assignee.role, assignee.team, assignee.id, meeting.accessRules)
   ) return;
@@ -259,18 +277,54 @@ export async function updateTaskAction(formData: FormData): Promise<void> {
 }
 
 export async function deleteTaskAction(formData: FormData): Promise<void> {
-  const manager = await requireWorkManager();
+  const manager = await requireUser();
   const taskId = positiveId(formData.get("taskId"));
   const task = getTask(taskId);
   const meeting = task ? getMeeting(task.meetingId) : undefined;
+  const isDraftReviewer = meeting?.reviewStatus === "draft" && !meeting.assignmentsPublishedAt && meeting.reviewerId === manager.id;
   if (
     !task || task.status !== "pending" || !meeting
     || !canAccessMeeting(manager.role, manager.team, manager.id, meeting.accessRules)
-    || !canManageTeam(manager.role, manager.team, task.assigneeTeam)
+    || (!isDraftReviewer && !canManageTeam(manager.role, manager.team, task.assigneeTeam))
   ) return;
   deleteTask(task.id);
   revalidatePath(`/meetings/${task.meetingId}`);
   revalidatePath("/work");
+}
+
+export async function delegateMeetingReviewAction(formData: FormData): Promise<void> {
+  const organizer = await requireUser();
+  const meetingId = positiveId(formData.get("meetingId"));
+  const reviewerId = positiveId(formData.get("reviewerId"));
+  delegateMeetingReview(meetingId, organizer.id, reviewerId);
+  revalidatePath(`/meetings/${meetingId}`);
+}
+
+export async function publishMeetingReviewAction(formData: FormData): Promise<void> {
+  const reviewer = await requireUser();
+  const meetingId = positiveId(formData.get("meetingId"));
+  const meeting = getMeeting(meetingId);
+  if (
+    !meeting
+    || meeting.processingStatus !== "completed"
+    || !canAccessMeeting(reviewer.role, reviewer.team, reviewer.id, meeting.accessRules)
+  ) return;
+  const output = field(formData, "output");
+  if (output === "transcript" || output === "summary" || output === "assignments") {
+    publishMeetingOutput(meetingId, reviewer.id, output);
+  } else {
+    publishMeetingReview(meetingId, reviewer.id);
+  }
+  revalidatePath(`/meetings/${meetingId}`);
+  revalidatePath("/meetings");
+  revalidatePath("/work");
+}
+
+export async function extendMeetingRetentionAction(formData: FormData): Promise<void> {
+  const user = await requireUser();
+  const meetingId = positiveId(formData.get("meetingId"));
+  extendMeetingRetention(meetingId, user.id);
+  revalidatePath(`/meetings/${meetingId}`);
 }
 
 export async function reviewTaskAction(formData: FormData): Promise<void> {

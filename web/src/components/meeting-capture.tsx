@@ -3,12 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import { FileUp, Mic, Pause, Play, RefreshCw, Square, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { confirmMeetingRecordingAction } from "@/app/actions/meetings";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
 type UploadKind = "audio" | "document";
 
-export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: number; canRetry?: boolean }) {
+export function MeetingCapture({
+  meetingId,
+  processingStatus,
+  canRetry = false,
+}: {
+  meetingId: number;
+  processingStatus: "idle" | "processing" | "completed" | "failed";
+  canRetry?: boolean;
+}) {
   const router = useRouter();
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -29,6 +38,12 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
 
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
+  useEffect(() => {
+    if (processingStatus !== "processing") return;
+    const timer = window.setInterval(() => router.refresh(), 4_000);
+    return () => window.clearInterval(timer);
+  }, [processingStatus, router]);
+
   async function upload(file: File, kind: UploadKind) {
     setBusy(true);
     setMessage(null);
@@ -37,16 +52,9 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
     data.set("kind", kind);
     try {
       const response = await fetch(`/api/meetings/${meetingId}/files`, { method: "POST", body: data });
-      const result = (await response.json()) as { error?: string; processing?: { status: "completed"; actions: number; assigned: number } | { status: "failed"; error: string } };
+      const result = (await response.json()) as { error?: string; processing?: { status: "processing" } };
       if (!response.ok) throw new Error(result.error || "Upload failed.");
-      if (result.processing?.status === "failed") {
-        setMessage({ text: result.processing.error, error: true });
-        router.refresh();
-        return;
-      }
-      if (result.processing?.status === "completed") {
-        setMessage({ text: `Transcript generated. ${result.processing.assigned} of ${result.processing.actions} detected assignments added to My work.`, error: false });
-      }
+      if (result.processing?.status === "processing") setMessage({ text: "Audio saved. Transcription is running in the background.", error: false });
       router.refresh();
     } catch (error) {
       setMessage({ text: error instanceof Error ? error.message : "Upload failed.", error: true });
@@ -57,11 +65,13 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
 
   async function startRecording() {
     setMessage(null);
+    if (!window.confirm("Confirm that every participant has been informed before recording starts.")) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setMessage({ text: "Audio recording is not supported in this browser.", error: true });
       return;
     }
     try {
+      if (!await confirmMeetingRecordingAction(meetingId)) throw new Error("Only the meeting organizer can confirm recording consent.");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       streamRef.current = stream;
@@ -80,10 +90,13 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
         const stamp = new Date().toISOString().replace(/[:.]/g, "-");
         await upload(new File([blob], `recording-${stamp}.webm`, { type: mime }), "audio");
       };
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance("Recording has started"));
+      }
       recorder.start();
       setRecording(true);
-    } catch {
-      setMessage({ text: "Microphone permission was denied or no microphone is available.", error: true });
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : "Microphone permission was denied or no microphone is available.", error: true });
     }
   }
 
@@ -92,10 +105,9 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
     setMessage(null);
     try {
       const response = await fetch(`/api/meetings/${meetingId}/process`, { method: "POST" });
-      const result = (await response.json()) as { error?: string; processing?: { status: "completed"; actions: number; assigned: number } | { status: "failed"; error: string } };
+      const result = (await response.json()) as { error?: string; processing?: { status: "processing" } };
       if (!response.ok || !result.processing) throw new Error(result.error || "Retry failed.");
-      if (result.processing.status === "failed") throw new Error(result.processing.error);
-      setMessage({ text: `Transcript generated. ${result.processing.assigned} new assignments added to My work.`, error: false });
+      setMessage({ text: "Retry started. The saved audio will not be deleted if processing fails.", error: false });
       router.refresh();
     } catch (error) {
       setMessage({ text: error instanceof Error ? error.message : "Retry failed.", error: true });
@@ -140,7 +152,9 @@ export function MeetingCapture({ meetingId, canRetry = false }: { meetingId: num
         <input ref={documentInputRef} className="sr-only" type="file" accept=".pdf,.ppt,.pptx,.doc,.docx,.txt,application/pdf" onChange={(event) => selectedFile(event, "document")} disabled={busy} />
         {canRetry ? <Button type="button" variant="outline" onClick={() => void retry()} disabled={busy}><RefreshCw className="size-4" /> Retry processing</Button> : null}
       </div>
-      {busy ? <p className="text-[12px] text-subtle">Saving file… Audio transcription may take a few minutes.</p> : null}
+      {recording ? <p className="font-medium text-red-700" role="status" aria-live="assertive">● Recording in progress · participants informed</p> : null}
+      {busy ? <p className="text-[12px] text-subtle">Saving file…</p> : null}
+      {processingStatus === "processing" ? <p className="text-[12px] text-subtle" role="status">Audio is safely stored. Transcription is processing…</p> : null}
       {message ? <Alert variant={message.error ? "destructive" : "default"}><AlertDescription>{message.text}</AlertDescription></Alert> : null}
     </div>
   );

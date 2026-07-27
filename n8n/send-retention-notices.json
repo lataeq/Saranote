@@ -1,0 +1,113 @@
+{
+  "name": "Saranote - Send retention notices",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "811e567c-85e6-4b98-8e11-55f3b97b7e19",
+      "name": "Daily Retention Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-480, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.SARANOTE_APP_BASE_URL || 'http://127.0.0.1:3000').replace(/\\/+$/, '') + '/api/automation/retention' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "dd06ce80-a7c1-4d49-a65e-40b127d7d430",
+      "name": "Fetch Retention Notices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [-240, 0]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "notices",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "id": "72b94540-b3f0-4df4-b0d7-e91474d93d22",
+      "name": "Split Notices",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "senderName": "Saranote"
+        }
+      },
+      "id": "8ed2550e-2e4c-4991-8cad-a90474f90fc8",
+      "name": "Send Retention Notice",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [240, 0],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.SARANOTE_APP_BASE_URL || 'http://127.0.0.1:3000').replace(/\\/+$/, '') + '/api/automation/retention' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ meetingId: $('Split Notices').item.json.meetingId, stage: $('Split Notices').item.json.stage }) }}",
+        "options": {}
+      },
+      "id": "5bbf2a77-fcbd-42cd-bd87-32e098f80310",
+      "name": "Acknowledge Notice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [480, 0]
+    }
+  ],
+  "connections": {
+    "Daily Retention Schedule": {
+      "main": [[{ "node": "Fetch Retention Notices", "type": "main", "index": 0 }]]
+    },
+    "Fetch Retention Notices": {
+      "main": [[{ "node": "Split Notices", "type": "main", "index": 0 }]]
+    },
+    "Split Notices": {
+      "main": [[{ "node": "Send Retention Notice", "type": "main", "index": 0 }]]
+    },
+    "Send Retention Notice": {
+      "main": [[{ "node": "Acknowledge Notice", "type": "main", "index": 0 }], []]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Bangkok",
+    "availableInMCP": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "active": false
+}

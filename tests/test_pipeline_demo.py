@@ -1,6 +1,6 @@
 import unittest
 
-from src.pipeline.run_demo import AUDIO_MIME_TYPES, process_meeting_rows, run_demo_from_rows
+from src.pipeline.run_demo import AUDIO_MIME_TYPES, build_transcript_corrections, process_meeting_rows, run_demo_from_rows
 
 
 CONFIG = {"max_chunk_characters": 35, "top_k": 1, "max_summary_points": 1}
@@ -17,6 +17,19 @@ class PipelineDemoTest(unittest.TestCase):
         self.assertIn("ฝ่ายขายต้องส่งรายงานภายในวันศุกร์", result["transcript"])
         self.assertEqual(result["action_items"][0]["owner"], "ฝ่ายขาย")
         self.assertEqual(result["summary"]["follow_ups"], ["ฝ่ายขาย: ส่งรายงาน (กำหนด วันศุกร์)"])
+
+    def test_gemini_wording_changes_keep_before_after_evidence(self):
+        corrections = build_transcript_corrections(
+            [{"timestamp": "00:10", "text": "ส่งงานวันสุก"}],
+            [{"timestamp": "00:10", "text": "ส่งงานวันศุกร์"}],
+        )
+
+        self.assertEqual(corrections, [{
+            "timestamp": "00:10",
+            "before": "ส่งงานวันสุก",
+            "after": "ส่งงานวันศุกร์",
+            "risk": "approval_required",
+        }])
 
     def test_run_demo_retrieves_presentation_with_source_citation(self):
         rows = [{"timestamp": "transcript-01", "text": "ที่ประชุมหารือแผนงานทั่วไป"}]

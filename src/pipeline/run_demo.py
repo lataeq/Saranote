@@ -140,22 +140,50 @@ def process_meeting_rows(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cleaned_rows = clean_transcript_rows(rows)
+    raw_rows = [dict(row) for row in cleaned_rows]
     gemini_summary = None
+    refinement_error = ""
     if config and config.get("gemini_model"):
-        cleaned_rows, gemini_summary = refine_meeting_with_gemini(cleaned_rows, config)
+        try:
+            cleaned_rows, gemini_summary = refine_meeting_with_gemini(cleaned_rows, config)
+        except RuntimeError as error:
+            refinement_error = str(error)
     action_items = extract_action_items(cleaned_rows)
     summary = extract_meeting_summary(cleaned_rows, action_items)
     if gemini_summary is not None:
         summary = {**gemini_summary, "follow_ups": summary["follow_ups"]}
     return {
         "cleaned_rows": cleaned_rows,
-        "transcript": "\n".join(
-            f"[{row['timestamp']}] {row['text']}" if row.get("timestamp") else str(row["text"])
-            for row in cleaned_rows
-        ),
+        "raw_transcript": _rows_to_transcript(raw_rows),
+        "transcript": _rows_to_transcript(cleaned_rows),
+        "corrections": build_transcript_corrections(raw_rows, cleaned_rows),
+        "refinement_error": refinement_error,
         "action_items": action_items,
         "summary": summary,
     }
+
+
+def _rows_to_transcript(rows: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        f"[{row['timestamp']}] {row['text']}" if row.get("timestamp") else str(row["text"])
+        for row in rows
+    )
+
+
+def build_transcript_corrections(
+    before_rows: list[dict[str, Any]],
+    after_rows: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "timestamp": str(before.get("timestamp", "")),
+            "before": str(before["text"]),
+            "after": str(after["text"]),
+            "risk": "approval_required",
+        }
+        for before, after in zip(before_rows, after_rows, strict=True)
+        if before["text"] != after["text"]
+    ]
 
 
 def refine_meeting_with_gemini(
@@ -167,7 +195,7 @@ def refine_meeting_with_gemini(
     api_key_env = str(config["gemini_api_key_env"])
     api_key = os.environ.get(api_key_env)
     if not api_key:
-        raise SystemExit(f"Set {api_key_env} before using Gemini transcript refinement.")
+        raise RuntimeError(f"Set {api_key_env} before using Gemini transcript refinement.")
 
     prompt = """แก้ไข transcript การประชุมภาษาไทยอย่างระมัดระวัง
 - แก้เฉพาะคำผิดจาก ASR การเว้นวรรค และเครื่องหมายวรรคตอนโดยอาศัยบริบท
@@ -335,7 +363,7 @@ def transcribe_audio_with_typhoon(audio_path: Path, config: dict[str, Any]) -> l
             headers={"Authorization": f"Bearer {api_key}"},
             data={"model": str(config["typhoon_model"])},
             files={"file": (audio_path.name, audio_file, AUDIO_MIME_TYPES.get(audio_path.suffix.lower(), "application/octet-stream"))},
-            timeout=120,
+            timeout=600,
         )
     if response.is_error:
         try:

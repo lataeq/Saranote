@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { currentUser } from "@/lib/auth";
-import { addFile, getMeeting, getTask, listUsers, submitTask, uploadsDirectory } from "@/lib/db";
+import { addFile, getMeeting, getSetting, getTask, listUsers, submitTask, uploadsDirectory } from "@/lib/db";
 import { canAccessMeeting, canManageTeam, canSubmitTask } from "@/lib/domain";
 
 export const runtime = "nodejs";
@@ -15,7 +15,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const taskId = Number((await params).id);
   const task = Number.isInteger(taskId) ? getTask(taskId) : undefined;
   const meeting = task ? getMeeting(task.meetingId) : undefined;
-  if (!task || !meeting) return Response.json({ error: "Assignment not found." }, { status: 404 });
+  if (!task || !task.publishedAt || task.cancelledAt || !meeting) return Response.json({ error: "Assignment not found." }, { status: 404 });
   if (
     !canAccessMeeting(user.role, user.team, user.id, meeting.accessRules)
     || !canSubmitTask(user.id, task.assigneeId, task.status)
@@ -51,12 +51,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   let notification: "not_configured" | "sent" | "failed" = "not_configured";
   const webhookUrl = process.env.N8N_TASK_SUBMITTED_WEBHOOK_URL;
   const webhookSecret = process.env.SARANOTE_N8N_WEBHOOK_SECRET;
+  const pilotMailbox = getSetting("pilot_email_sink") || process.env.SARANOTE_PILOT_EMAIL_SINK;
   const reviewers = listUsers().filter((reviewer) => (
     reviewer.role !== "team_member"
     && canManageTeam(reviewer.role, reviewer.team, task.assigneeTeam)
     && canAccessMeeting(reviewer.role, reviewer.team, reviewer.id, meeting.accessRules)
   ));
-  if (webhookUrl && webhookSecret && reviewers.length) {
+  if (webhookUrl && webhookSecret && pilotMailbox && reviewers.length) {
     try {
       const appBaseUrl = process.env.SARANOTE_APP_BASE_URL?.replace(/\/+$/, "");
       const response = await fetch(webhookUrl, {
@@ -69,7 +70,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           meeting: { id: meeting.id, title: meeting.title, url: appBaseUrl ? `${appBaseUrl}/meetings/${meeting.id}` : null },
           assignee: { name: user.name, email: user.email, role: user.role, team: user.team },
           submission: { text, fileName: submittedFileName },
-          reviewers: reviewers.map(({ name, email, role }) => ({ name, email, role })),
+          reviewers: reviewers.map(({ name, email, role }) => ({ name, email: pilotMailbox, employeeEmail: email, role })),
         }),
         signal: AbortSignal.timeout(10_000),
       });

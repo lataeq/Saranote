@@ -1,14 +1,17 @@
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { currentUser } from "@/lib/auth";
-import { addFile, getMeeting, uploadsDirectory } from "@/lib/db";
+import { addFile, getMeeting, startMeetingProcessing, uploadsDirectory } from "@/lib/db";
 import { canAccessMeeting } from "@/lib/domain";
-import { extractDocumentSections, processMeetingAudio, type ProcessingResult } from "@/lib/meeting-processing";
+import { extractDocumentSections, processMeetingAudio } from "@/lib/meeting-processing";
 
 export const runtime = "nodejs";
-const MAX_FILE_SIZE = 25 * 1024 * 1024;
+export const maxDuration = 900;
+const MAX_DOCUMENT_SIZE = 25 * 1024 * 1024;
+const MAX_AUDIO_SIZE = 200 * 1024 * 1024;
 const DOCUMENT_EXTENSIONS = new Set([".pdf", ".ppt", ".pptx", ".doc", ".docx", ".txt"]);
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -25,8 +28,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const file = formData.get("file");
   const kind = String(formData.get("kind") ?? "");
   if (!(file instanceof File) || !file.size) return Response.json({ error: "Choose a file to upload." }, { status: 400 });
-  if (file.size > MAX_FILE_SIZE) return Response.json({ error: "Files must be 25 MB or smaller." }, { status: 413 });
   if (kind !== "audio" && kind !== "document") return Response.json({ error: "Unsupported file category." }, { status: 400 });
+  const maxSize = kind === "audio" ? MAX_AUDIO_SIZE : MAX_DOCUMENT_SIZE;
+  if (file.size > maxSize) return Response.json({ error: `${kind === "audio" ? "Audio" : "Documents"} must be ${maxSize / 1024 / 1024} MB or smaller.` }, { status: 413 });
 
   const originalName = path.basename(file.name).replace(/[\u0000-\u001f]/g, "");
   const extension = path.extname(originalName).toLowerCase();
@@ -37,17 +41,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const destination = path.join(uploadsDirectory, storedName);
   await mkdir(uploadsDirectory, { recursive: true });
   await writeFile(destination, new Uint8Array(await file.arrayBuffer()));
+  await chmod(destination, 0o600);
   try {
     const documentSections = kind === "document" && [".pdf", ".pptx"].includes(extension)
       ? await extractDocumentSections(destination)
       : [];
     const id = addFile({ meetingId, taskId: null, originalName, storedName, mimeType: file.type || "application/octet-stream", kind, size: file.size, uploadedBy: user.id, documentSections });
-    let processing: ProcessingResult | undefined;
     if (kind === "audio") {
-      processing = await processMeetingAudio(meetingId, destination, user.id);
+      if (startMeetingProcessing(meetingId)) {
+        after(async () => {
+          await processMeetingAudio(meetingId, destination, user.id);
+          revalidatePath(`/meetings/${meetingId}`);
+        });
+      }
+      revalidatePath(`/meetings/${meetingId}`);
+      return Response.json({ id, processing: { status: "processing" } }, { status: 201 });
     }
     revalidatePath(`/meetings/${meetingId}`);
-    return Response.json({ id, processing }, { status: 201 });
+    return Response.json({ id }, { status: 201 });
   } catch (error) {
     await unlink(destination).catch(() => undefined);
     const message = kind === "document" && [".pdf", ".pptx"].includes(extension)
