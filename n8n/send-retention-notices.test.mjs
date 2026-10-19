@@ -5,7 +5,7 @@ import test from "node:test";
 const workflow = JSON.parse(await readFile(new URL("./send-retention-notices.json", import.meta.url), "utf8"));
 const node = (name) => workflow.nodes.find((item) => item.name === name);
 
-test("sends daily retention notices only to the server-provided pilot mailbox", () => {
+test("sends daily retention notices only to the server-provided notification mailbox", () => {
   const schedule = node("Daily Retention Schedule").parameters.rule.interval[0];
   assert.equal(schedule.field, "days");
   assert.equal(schedule.daysInterval, 1);

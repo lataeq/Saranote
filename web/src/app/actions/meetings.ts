@@ -143,11 +143,11 @@ export async function sendMeetingSummaryEmailAction(formData: FormData): Promise
   if (!meeting.transcriptPublishedAt || !meeting.summaryPublishedAt) redirect(`/meetings/${meetingId}?summaryError=Publish+the+reviewed+transcript+and+summary+before+sending+email.`);
   if (!meeting.transcript.trim()) redirect(`/meetings/${meetingId}?summaryError=Process+the+meeting+before+sending+its+summary.`);
 
-  const pilotMailbox = getSetting("pilot_email_sink") || process.env.SARANOTE_PILOT_EMAIL_SINK;
-  if (!pilotMailbox) redirect(`/meetings/${meetingId}?summaryError=Configure+the+controlled+pilot+mailbox+before+sending+email.`);
+  const notificationMailbox = getSetting("notification_email") || process.env.SARANOTE_NOTIFICATION_EMAIL;
+  if (!notificationMailbox) redirect(`/meetings/${meetingId}?summaryError=Configure+the+notification+mailbox+before+sending+email.`);
   const recipients = meetingParticipants(listUsers(), meeting.accessRules).map(({ name, email, spokenName }) => ({
     name,
-    email: pilotMailbox,
+    email: notificationMailbox,
     employeeEmail: email,
     spokenNames: spokenName.split(/[,;\n]/).map((value) => value.trim()).filter(Boolean),
   }));
@@ -306,7 +306,8 @@ export async function publishMeetingReviewAction(formData: FormData): Promise<vo
   const meeting = getMeeting(meetingId);
   if (
     !meeting
-    || meeting.processingStatus !== "completed"
+    || meeting.reviewStatus !== "draft"
+    || !meeting.transcript.trim()
     || !canAccessMeeting(reviewer.role, reviewer.team, reviewer.id, meeting.accessRules)
   ) return;
   const output = field(formData, "output");

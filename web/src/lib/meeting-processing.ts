@@ -80,13 +80,6 @@ export async function processMeetingAudio(meetingId: number, audioPath: string, 
       result.corrections ?? [],
       result.refinement_error ?? "",
     );
-    if (result.refinement_error) {
-      const message = result.refinement_error.includes("GEMINI_API_KEY")
-        ? "Gemini API key is not configured on the web server."
-        : "Gemini transcript refinement failed.";
-      failMeetingProcessing(meetingId, message);
-      return { status: "failed", error: message };
-    }
     return { status: "completed", actions: result.action_items.length, assigned };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";

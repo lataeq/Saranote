@@ -23,12 +23,12 @@ async function updateProcessingKey(formData: FormData) {
   redirect(`/settings?saved=${provider}`);
 }
 
-async function updatePilotMailbox(formData: FormData) {
+async function updateNotificationMailbox(formData: FormData) {
   "use server";
   const user = await requireWorkManager();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) redirect("/settings?error=Enter+a+valid+pilot+mailbox.");
-  setSetting("pilot_email_sink", email, user.id);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) redirect("/settings?error=Enter+a+valid+notification+mailbox.");
+  setSetting("notification_email", email, user.id);
   redirect("/settings?saved=mailbox");
 }
 
@@ -36,7 +36,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   await requireWorkManager();
   const typhoonConfigured = Boolean(getSetting("typhoon_api_key"));
   const geminiConfigured = Boolean(getSetting("gemini_api_key"));
-  const pilotMailbox = getSetting("pilot_email_sink") ?? "";
+  const notificationMailbox = getSetting("notification_email") ?? "";
   const { saved, removed, error } = await searchParams;
 
   return (
@@ -47,7 +47,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <p className="mt-1 text-[13px] text-default">Configure server-side meeting processing.</p>
       </header>
 
-      {saved ? <Alert><AlertDescription>{saved === "mailbox" ? "Pilot mailbox updated." : `${saved === "gemini" ? "Gemini" : "Typhoon"} API key updated.`}</AlertDescription></Alert> : null}
+      {saved ? <Alert><AlertDescription>{saved === "mailbox" ? "Notification mailbox updated." : `${saved === "gemini" ? "Gemini" : "Typhoon"} API key updated.`}</AlertDescription></Alert> : null}
       {removed ? <Alert><AlertDescription>{removed === "gemini" ? "Gemini" : "Typhoon"} API key removed.</AlertDescription></Alert> : null}
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
 
@@ -71,11 +71,11 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
 
       <section className="space-y-4 border-t pt-5">
         <div>
-          <h2 className="text-[16px] font-semibold">Controlled pilot mailbox</h2>
-          <p className="text-[12px] text-subtle">All pilot email notifications are routed here instead of employee addresses.</p>
+          <h2 className="text-[16px] font-semibold">Notification mailbox</h2>
+          <p className="text-[12px] text-subtle">Send all automated email notifications to this address.</p>
         </div>
-        <form action={updatePilotMailbox} className="flex flex-wrap gap-2">
-          <Input name="email" type="email" defaultValue={pilotMailbox} placeholder="pilot@example.com" required className="min-w-64 flex-1" aria-label="Controlled pilot mailbox" />
+        <form action={updateNotificationMailbox} className="flex flex-wrap gap-2">
+          <Input name="email" type="email" defaultValue={notificationMailbox} placeholder="notifications@example.com" required className="min-w-64 flex-1" aria-label="Notification mailbox" />
           <Button type="submit">Save mailbox</Button>
         </form>
       </section>

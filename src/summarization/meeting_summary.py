@@ -28,6 +28,7 @@ def extract_meeting_summary(
         if len(follow_ups) == max_items:
             break
     return {
+        "overview": "",
         "decisions": decisions,
         "risks": risks,
         "important_points": important_points,

@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { endSession, requireManager, requireUser, startSession } from "@/lib/auth";
-import { acknowledgePilotPrivacy, createUser, findUserCredentials, getUser, hasUsers, updateUserAccess } from "@/lib/db";
+import { acknowledgePrivacy, createUser, findUserCredentials, getUser, hasUsers, updateUserAccess } from "@/lib/db";
 import { isSpecialtyTeam, isUserRole } from "@/lib/domain";
 import { hashPassword, verifyPassword } from "@/lib/password";
 
@@ -52,10 +52,10 @@ export async function loginAction(formData: FormData): Promise<void> {
   redirect(user.privacyAcknowledgedAt ? "/meetings" : "/privacy");
 }
 
-export async function acknowledgePilotPrivacyAction(formData: FormData): Promise<void> {
+export async function acknowledgePrivacyAction(formData: FormData): Promise<void> {
   const user = await requireUser();
-  if (field(formData, "agree") !== "yes") authError("/privacy", "You must acknowledge the pilot privacy notice to continue.");
-  acknowledgePilotPrivacy(user.id);
+  if (field(formData, "agree") !== "yes") authError("/privacy", "You must acknowledge the privacy notice to continue.");
+  acknowledgePrivacy(user.id);
   redirect("/meetings");
 }
 

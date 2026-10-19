@@ -189,7 +189,7 @@ def build_transcript_corrections(
 def refine_meeting_with_gemini(
     rows: list[dict[str, Any]],
     config: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import httpx
 
     api_key_env = str(config["gemini_api_key_env"])
@@ -202,6 +202,7 @@ def refine_meeting_with_gemini(
 - รักษาความหมายเดิม ห้ามเพิ่ม ลบ สรุป หรือคาดเดาข้อมูล
 - คง English technical terms เมื่อบริบทบ่งชี้ชัดเจน และห้ามประดิษฐ์ชื่อบุคคล
 - คืน cleaned_rows ให้มีจำนวน ลำดับ และ timestamp ตรงกับ input ทุกประการ
+- สร้าง overview ภาษาไทยที่ครอบคลุมหัวข้อสนทนา มติ ความเสี่ยง งานติดตาม ชื่อ วันที่ และตัวเลขสำคัญ โดยไม่เพิ่มข้อมูลนอก transcript
 - สร้าง summary ภาษาไทยจากข้อมูลที่ปรากฏจริงเท่านั้น ไม่เกินหมวดละ 4 ข้อ และใช้ [] เมื่อไม่มีข้อมูล
 
 Transcript JSON:
@@ -254,8 +255,11 @@ def _gemini_response_schema() -> dict[str, Any]:
             },
             "summary": {
                 "type": "object",
-                "properties": summary_properties,
-                "required": list(SUMMARY_KEYS),
+                "properties": {
+                    "overview": {"type": "string"},
+                    **summary_properties,
+                },
+                "required": ["overview", *SUMMARY_KEYS],
                 "additionalProperties": False,
             },
         },
@@ -290,7 +294,10 @@ def _parse_gemini_result(
 
     if not isinstance(returned_summary, dict):
         raise RuntimeError("Gemini cleanup returned an invalid meeting summary.")
-    summary = {}
+    overview = returned_summary.get("overview")
+    if not isinstance(overview, str) or not overview.strip():
+        raise RuntimeError("Gemini cleanup returned an invalid meeting overview.")
+    summary: dict[str, Any] = {"overview": overview.strip()}
     for key in SUMMARY_KEYS:
         items = returned_summary.get(key)
         if not isinstance(items, list) or len(items) > 4 or any(not isinstance(item, str) or not item.strip() for item in items):

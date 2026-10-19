@@ -51,13 +51,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   let notification: "not_configured" | "sent" | "failed" = "not_configured";
   const webhookUrl = process.env.N8N_TASK_SUBMITTED_WEBHOOK_URL;
   const webhookSecret = process.env.SARANOTE_N8N_WEBHOOK_SECRET;
-  const pilotMailbox = getSetting("pilot_email_sink") || process.env.SARANOTE_PILOT_EMAIL_SINK;
+  const notificationMailbox = getSetting("notification_email") || process.env.SARANOTE_NOTIFICATION_EMAIL;
   const reviewers = listUsers().filter((reviewer) => (
     reviewer.role !== "team_member"
     && canManageTeam(reviewer.role, reviewer.team, task.assigneeTeam)
     && canAccessMeeting(reviewer.role, reviewer.team, reviewer.id, meeting.accessRules)
   ));
-  if (webhookUrl && webhookSecret && pilotMailbox && reviewers.length) {
+  if (webhookUrl && webhookSecret && notificationMailbox && reviewers.length) {
     try {
       const appBaseUrl = process.env.SARANOTE_APP_BASE_URL?.replace(/\/+$/, "");
       const response = await fetch(webhookUrl, {
@@ -70,7 +70,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           meeting: { id: meeting.id, title: meeting.title, url: appBaseUrl ? `${appBaseUrl}/meetings/${meeting.id}` : null },
           assignee: { name: user.name, email: user.email, role: user.role, team: user.team },
           submission: { text, fileName: submittedFileName },
-          reviewers: reviewers.map(({ name, email, role }) => ({ name, email: pilotMailbox, employeeEmail: email, role })),
+          reviewers: reviewers.map(({ name, email, role }) => ({ name, email: notificationMailbox, employeeEmail: email, role })),
         }),
         signal: AbortSignal.timeout(10_000),
       });

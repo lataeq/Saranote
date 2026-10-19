@@ -1,6 +1,7 @@
+import json
 import unittest
 
-from src.pipeline.run_demo import AUDIO_MIME_TYPES, build_transcript_corrections, process_meeting_rows, run_demo_from_rows
+from src.pipeline.run_demo import AUDIO_MIME_TYPES, _parse_gemini_result, build_transcript_corrections, process_meeting_rows, run_demo_from_rows
 
 
 CONFIG = {"max_chunk_characters": 35, "top_k": 1, "max_summary_points": 1}
@@ -30,6 +31,30 @@ class PipelineDemoTest(unittest.TestCase):
             "after": "ส่งงานวันศุกร์",
             "risk": "approval_required",
         }])
+
+    def test_gemini_result_includes_a_reviewable_meeting_overview(self):
+        source = [{"timestamp": "00:10", "text": "ที่ประชุมอนุมัติแผนงาน"}]
+        payload = {
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "text": json.dumps({
+                            "cleaned_rows": source,
+                            "summary": {
+                                "overview": "ที่ประชุมอนุมัติแผนงาน",
+                                "decisions": ["อนุมัติแผนงาน"],
+                                "risks": [],
+                                "important_points": [],
+                            },
+                        }, ensure_ascii=False),
+                    }],
+                },
+            }],
+        }
+
+        _, summary = _parse_gemini_result(payload, source)
+
+        self.assertEqual(summary["overview"], "ที่ประชุมอนุมัติแผนงาน")
 
     def test_run_demo_retrieves_presentation_with_source_citation(self):
         rows = [{"timestamp": "transcript-01", "text": "ที่ประชุมหารือแผนงานทั่วไป"}]

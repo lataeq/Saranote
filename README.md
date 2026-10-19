@@ -44,7 +44,7 @@ cleaned transcript and meeting evidence
 - Organizes employees into Web Development, Business Analysis, AI Engineering, and Sales teams.
 - Supports meetings for entire teams, leaders, members, or selected employees.
 - Restricts meetings, files, search results, assignments, and reviews to authorized users.
-- Requires a one-time pilot privacy acknowledgment and a recorded confirmation before every browser recording.
+- Requires a one-time privacy acknowledgment and a recorded confirmation before every browser recording.
 - Deletes meeting artifacts after 30 days, with one 30-day extension; assignments receive a separate 30-day clock after approval or cancellation.
 
 ## Technical Approach
@@ -91,7 +91,7 @@ The web server stores users, meetings, access rules, files, and assignments in a
 
 ### n8n meeting-summary email
 
-Typhoon produces the transcript, then Gemini 3.1 Flash-Lite proposes wording corrections and a structured summary. Saranote preserves the pre-Gemini transcript and keeps all generated output in a private draft until review. n8n sends only published summaries, task reminders, and retention notices. During the thesis pilot, every email is routed to one controlled mailbox configured in Settings.
+Typhoon produces the transcript, then Gemini 3.1 Flash-Lite proposes wording corrections and a structured summary. Saranote preserves the pre-Gemini transcript and keeps all generated output private until review. n8n sends only approved summaries, task reminders, and retention notices. Automated email can be routed to one notification mailbox configured in Settings.
 
 Import the workflow and start n8n:
 
@@ -196,12 +196,12 @@ Open [http://localhost:3000](http://localhost:3000). The first visit creates the
 
 The default demo configuration is stored in `configs/final_demo.yaml`.
 
-Set the Typhoon and Gemini keys plus the controlled pilot mailbox in the manager Settings page, or provide the keys to the server environment:
+Set the Typhoon and Gemini keys plus the notification mailbox in the manager Settings page, or provide the keys to the server environment:
 
 ```bash
 export TYPHOON_API_KEY="your-key"
 export GEMINI_API_KEY="your-key"
-export SARANOTE_PILOT_EMAIL_SINK="your-controlled-mailbox@example.com"
+export SARANOTE_NOTIFICATION_EMAIL="your-notification-mailbox@example.com"
 ```
 
 API keys, local databases, uploads, generated transcripts, recordings, datasets, and model checkpoints are excluded from Git.
@@ -243,4 +243,4 @@ npm audit --audit-level=moderate
 
 ## Privacy
 
-Meeting recordings, transcripts, documents, account data, and API credentials are stored locally and excluded from version control. This milestone is for fictional, registered-employee thesis data only. Every account accepts the pilot notice once, and the organizer must confirm that participants were informed before each recording.
+Meeting recordings, transcripts, documents, account data, and API credentials are stored locally and excluded from version control. Every account accepts the privacy notice once, and the organizer must confirm that participants were informed before each recording.

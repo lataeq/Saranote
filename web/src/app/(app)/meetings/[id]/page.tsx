@@ -22,10 +22,10 @@ export default async function MeetingPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ summarySent?: string; summaryError?: string }>;
+  searchParams: Promise<{ summarySent?: string; summaryError?: string; tab?: string }>;
 }) {
   const user = await requireUser();
-  const { summarySent, summaryError } = await searchParams;
+  const { summarySent, summaryError, tab } = await searchParams;
   const meetingId = Number((await params).id);
   if (!Number.isInteger(meetingId) || meetingId < 1) notFound();
   const meeting = getMeeting(meetingId);
@@ -59,7 +59,7 @@ export default async function MeetingPage({
     { label: "ประเด็นสำคัญ", icon: ListTree, items: summaryVisible ? meeting.summary.important_points : [] },
     { label: "งานที่ต้องติดตาม", icon: ListChecks, items: summaryVisible ? meeting.summary.follow_ups : [] },
   ];
-  const hasSummary = summarySections.some((section) => section.items.length);
+  const hasSummary = summaryVisible && (Boolean(meeting.summary.overview) || summarySections.some((section) => section.items.length));
   const emailRecipients = users.map((member) => `${member.name} (${member.email})`).join(", ");
   const retentionDays = Math.max(0, meeting.retentionDaysRemaining);
   const canControlRetention = user.role === "manager" || user.id === meeting.createdById;
@@ -96,7 +96,7 @@ export default async function MeetingPage({
         <Alert className="border-amber-300 bg-amber-50 text-amber-950">
           <AlertTriangle className="size-4" />
           <AlertDescription className="space-y-3 text-amber-900">
-            <p>Draft outputs are hidden from participants. Reviewer: {meeting.reviewerName}.</p>
+            <p>Review required before participants can see generated outputs. Reviewer: {meeting.reviewerName}.</p>
             <div className="flex flex-wrap gap-2">
               {user.id === meeting.createdById ? (
                 <form action={delegateMeetingReviewAction} className="flex flex-wrap gap-2">
@@ -107,12 +107,13 @@ export default async function MeetingPage({
                   <Button type="submit" variant="outline" size="sm">Delegate review</Button>
                 </form>
               ) : null}
-              {isReviewer && meeting.processingStatus === "completed" ? (
+              {isReviewer && meeting.transcript ? (
                 <>
-                  {!meeting.transcriptPublishedAt ? <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><input type="hidden" name="output" value="transcript" /><Button type="submit" size="sm">Publish transcript</Button></form> : null}
-                  {!meeting.summaryPublishedAt ? <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><input type="hidden" name="output" value="summary" /><Button type="submit" size="sm">Publish summary</Button></form> : null}
-                  {!meeting.assignmentsPublishedAt ? <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><input type="hidden" name="output" value="assignments" /><Button type="submit" size="sm">Publish assignments</Button></form> : null}
-                  <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><Button type="submit" size="sm" variant="outline">Publish all reviewed</Button></form>
+                  {!meeting.transcriptPublishedAt ? <Button asChild size="sm" variant="outline"><Link href={`/meetings/${meeting.id}?tab=transcript`}>Review or correct transcript</Link></Button> : null}
+                  {!meeting.transcriptPublishedAt ? <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><input type="hidden" name="output" value="transcript" /><Button type="submit" size="sm">Approve transcript</Button></form> : null}
+                  {!meeting.summaryPublishedAt ? <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><input type="hidden" name="output" value="summary" /><Button type="submit" size="sm">Approve summary</Button></form> : null}
+                  {!meeting.assignmentsPublishedAt ? <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><input type="hidden" name="output" value="assignments" /><Button type="submit" size="sm">Approve assignments</Button></form> : null}
+                  <form action={publishMeetingReviewAction}><input type="hidden" name="meetingId" value={meeting.id} /><Button type="submit" size="sm" variant="outline">Approve all outputs</Button></form>
                 </>
               ) : null}
             </div>
@@ -121,7 +122,7 @@ export default async function MeetingPage({
       ) : null}
       {isDraft && !canSeeDraft ? <Alert><AlertDescription>The transcript, summary, and assignments are awaiting organizer review.</AlertDescription></Alert> : null}
 
-      <Tabs defaultValue="overview">
+      <Tabs defaultValue={tab === "transcript" ? "transcript" : "overview"}>
         <TabsList className="w-full justify-start overflow-x-auto rounded-md bg-[#f5f5f5]">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="transcript">Transcript</TabsTrigger>
@@ -141,7 +142,9 @@ export default async function MeetingPage({
               {meeting.transcriptPublishedAt && meeting.summaryPublishedAt && meeting.transcript && user.role === "manager" ? <form action={sendMeetingSummaryEmailAction}><input type="hidden" name="meetingId" value={meeting.id} /><SummaryEmailSubmitButton /></form> : null}
             </div>
             {meeting.summaryEmailSentAt ? <div className="mb-3 flex gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-emerald-950"><Mail className="mt-0.5 size-4 shrink-0" /><div><p className="text-[13px] font-medium">Last emailed {formatDateTime(meeting.summaryEmailSentAt)}</p><p className="mt-0.5 text-[12px] text-emerald-800">To: {meeting.summaryEmailRecipients.join(", ")}</p></div></div> : null}
-            {hasSummary ? <div className="grid border-y sm:grid-cols-2">{summarySections.map((section, index) => { const Icon = section.icon; return <div key={section.label} className={`p-4 ${index > 1 ? "border-t" : ""} ${index % 2 ? "sm:border-l" : ""} ${index === 1 ? "border-t sm:border-t-0" : ""}`}><div className="mb-2 flex items-center gap-2"><Icon className="size-4 text-subtle" /><h3 className="text-[13px] font-medium">{section.label}</h3></div>{section.items.length ? <ul className="space-y-2 text-default">{section.items.map((item) => <li key={item} className="leading-5">{item}</li>)}</ul> : <p className="text-[12px] text-subtle">None detected.</p>}</div>; })}</div> : <div className="border-y py-6 text-center text-[12px] text-subtle">{summaryVisible ? "Process meeting audio to generate the summary." : "Summary hidden until its review is published."}</div>}
+            {summaryVisible && meeting.summary.overview ? <div className="mb-4 rounded-lg border bg-[#fafafa] p-4"><h3 className="text-[13px] font-medium">ภาพรวมการประชุมโดย AI</h3><p className="mt-2 whitespace-pre-wrap leading-6 text-default">{meeting.summary.overview}</p></div> : null}
+            {summaryVisible && hasSummary ? <p className="mb-3 text-[12px] text-subtle">{meeting.refinementError ? "Gemini was unavailable. The sections below are fallback extracts from transcript keywords and action items." : "Gemini generated the overview, decisions, risks, and important points. Follow-up work comes from transcript action-item detection. Review all output against the transcript before approval."}</p> : null}
+            {hasSummary ? <div className="grid border-y sm:grid-cols-2">{summarySections.map((section, index) => { const Icon = section.icon; return <div key={section.label} className={`p-4 ${index > 1 ? "border-t" : ""} ${index % 2 ? "sm:border-l" : ""} ${index === 1 ? "border-t sm:border-t-0" : ""}`}><div className="mb-2 flex items-center gap-2"><Icon className="size-4 text-subtle" /><h3 className="text-[13px] font-medium">{section.label}</h3></div>{section.items.length ? <ul className="space-y-2 text-default">{section.items.map((item) => <li key={item} className="leading-5">{item}</li>)}</ul> : <p className="text-[12px] text-subtle">None detected.</p>}</div>; })}</div> : <div className="border-y py-6 text-center text-[12px] text-subtle">{summaryVisible ? "Process meeting audio to generate the AI summary." : "Summary hidden until its review is approved."}</div>}
           </section>
           <section>
             <h2 className="mb-3 text-[16px] font-semibold">Recordings</h2>
@@ -151,7 +154,8 @@ export default async function MeetingPage({
 
         <TabsContent value="transcript" className="mt-5">
           <div className="mb-3"><h2 className="text-[16px] font-semibold">Meeting transcript</h2><p className="mt-1 text-[12px] text-subtle">Audio recordings and uploads are transcribed automatically; leaders can correct the result.</p></div>
-          {meeting.processingStatus === "failed" ? <Alert variant="destructive" className="mb-3"><AlertDescription>{meeting.processingError}</AlertDescription></Alert> : null}
+          {meeting.processingStatus === "failed" && !meeting.transcript ? <Alert variant="destructive" className="mb-3"><AlertDescription>{meeting.processingError}</AlertDescription></Alert> : null}
+          {meeting.refinementError ? <Alert className="mb-3 border-amber-300 bg-amber-50 text-amber-950"><AlertTriangle className="size-4" /><AlertDescription className="text-amber-900">Gemini refinement was unavailable. The original transcription is preserved below for manual correction and approval.</AlertDescription></Alert> : null}
           {canSeeDraft && meeting.corrections.length ? (
             <section className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
               <h3 className="font-medium text-amber-950">Gemini changes · approval required</h3>
@@ -175,7 +179,7 @@ export default async function MeetingPage({
             <form action={updateTranscriptAction} className="space-y-3">
               <input type="hidden" name="meetingId" value={meeting.id} />
               <Textarea name="transcript" defaultValue={meeting.transcript} rows={18} placeholder="Paste or import the meeting transcript here…" className="leading-6" />
-              <Button type="submit">Save transcript</Button>
+              <Button type="submit">Save corrected transcript</Button>
             </form>
           ) : transcriptVisible && meeting.transcript ? <div className="whitespace-pre-wrap rounded-lg border p-4 leading-6">{meeting.transcript}</div> : <div className="rounded-lg border border-dashed p-6 text-center text-[12px] text-subtle">{transcriptVisible ? "No transcript is available yet." : "Transcript hidden until its review is published."}</div>}
         </TabsContent>

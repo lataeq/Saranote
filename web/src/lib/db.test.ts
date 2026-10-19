@@ -89,22 +89,22 @@ describe("meeting summary email delivery", () => {
 describe("meeting output review", () => {
   it("keeps generated assignments hidden until the organizer publishes them", () => {
     const managerId = db.createUser({
-      name: "Pilot Manager",
-      email: "pilot-manager@example.com",
+      name: "Review Manager",
+      email: "review-manager@example.com",
       passwordHash: "test",
       role: "manager",
       team: null,
     });
     const memberId = db.createUser({
-      name: "Pilot Member",
-      email: "pilot-member@example.com",
+      name: "Review Member",
+      email: "review-member@example.com",
       passwordHash: "test",
       role: "team_member",
       team: "web_development",
       spokenName: "สมาชิก",
     });
     const meetingId = db.createMeeting({
-      title: "Pilot review",
+      title: "Meeting review",
       heldAt: new Date().toISOString(),
       accessRules: [{ team: "web_development", audience: "all_team", audienceUserId: null }],
       createdBy: managerId,
@@ -119,7 +119,7 @@ describe("meeting output review", () => {
         deadline: null,
         evidence: { timestamp: "00:00", text: "สมาชิกจะส่งรายงาน" },
       }],
-      { decisions: [], risks: [], important_points: [], follow_ups: [] },
+      { overview: "", decisions: [], risks: [], important_points: [], follow_ups: [] },
       managerId,
       "[00:00] สมาชิกจะสงรายงาน",
       [{
@@ -207,7 +207,7 @@ describe("meeting processing claim", () => {
   });
 });
 
-describe("pilot privacy acknowledgment", () => {
+describe("privacy acknowledgment", () => {
   it("records a user's one-time acknowledgment", () => {
     const userId = db.createUser({
       name: "Privacy Member",
@@ -218,9 +218,9 @@ describe("pilot privacy acknowledgment", () => {
     });
 
     expect(db.getUser(userId)?.privacyAcknowledgedAt).toBe("");
-    expect(db.acknowledgePilotPrivacy(userId)).toBe(true);
+    expect(db.acknowledgePrivacy(userId)).toBe(true);
     expect(db.getUser(userId)?.privacyAcknowledgedAt).not.toBe("");
-    expect(db.acknowledgePilotPrivacy(userId)).toBe(false);
+    expect(db.acknowledgePrivacy(userId)).toBe(false);
   });
 });
 
@@ -252,7 +252,7 @@ describe("recording consent confirmation", () => {
   });
 });
 
-describe("pilot retention", () => {
+describe("retention", () => {
   it("purges expired meeting artifacts without deleting published assignments", () => {
     const managerId = db.createUser({
       name: "Retention Manager",
@@ -294,7 +294,7 @@ describe("pilot retention", () => {
         deadline: null,
         evidence: { timestamp: "00:00", text: "ผู้รับผิดชอบต้องส่งรายงาน" },
       }],
-      { decisions: ["เก็บข้อมูล"], risks: [], important_points: [], follow_ups: [] },
+      { overview: "ที่ประชุมตกลงให้เก็บข้อมูล", decisions: ["เก็บข้อมูล"], risks: [], important_points: [], follow_ups: [] },
       managerId,
     );
     db.publishMeetingReview(meetingId, managerId);

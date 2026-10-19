@@ -16,9 +16,24 @@ data/external/
 
 # Outputs
 outputs/
+output/
 runs/
 logs/
 *.log
+
+# Documents and generated archives
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.zip
+
+# Local research and training artifacts
+proposal/
+new-train/
 
 # Model artifacts
 checkpoints/

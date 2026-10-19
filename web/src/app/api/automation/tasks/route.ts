@@ -13,8 +13,8 @@ export async function GET(request: Request) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
 
-  const pilotMailbox = getSetting("pilot_email_sink") || process.env.SARANOTE_PILOT_EMAIL_SINK;
-  if (!pilotMailbox) return Response.json({ error: "Controlled pilot mailbox is not configured." }, { status: 503 });
+  const notificationMailbox = getSetting("notification_email") || process.env.SARANOTE_NOTIFICATION_EMAIL;
+  if (!notificationMailbox) return Response.json({ error: "Notification mailbox is not configured." }, { status: 503 });
   const appBaseUrl = process.env.SARANOTE_APP_BASE_URL?.replace(/\/+$/, "") ?? new URL(request.url).origin;
   const tasks = listUsers()
     .filter((user) => user.role !== "manager")
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
           url: `${appBaseUrl}/work`,
         },
         meeting: { id: task.meetingId, title: task.meetingTitle, url: `${appBaseUrl}/meetings/${task.meetingId}` },
-        assignee: { id: assignee.id, name: assignee.name, email: pilotMailbox, employeeEmail: assignee.email, role: assignee.role, team: assignee.team },
+        assignee: { id: assignee.id, name: assignee.name, email: notificationMailbox, employeeEmail: assignee.email, role: assignee.role, team: assignee.team },
       })));
 
   return Response.json({ generatedAt: new Date().toISOString(), tasks });

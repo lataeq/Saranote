@@ -54,6 +54,7 @@ export type Meeting = {
 };
 
 export type MeetingSummary = {
+  overview: string;
   decisions: string[];
   risks: string[];
   important_points: string[];
@@ -358,7 +359,7 @@ export function updateUserAccess(id: number, role: UserRole, team: SpecialtyTeam
   refreshDetectedActionOwners();
 }
 
-export function acknowledgePilotPrivacy(userId: number): boolean {
+export function acknowledgePrivacy(userId: number): boolean {
   return prepare(
     "UPDATE users SET privacy_acknowledged_at = ? WHERE id = ? AND privacy_acknowledged_at = ''",
   ).run(new Date().toISOString(), userId).changes === 1;
@@ -413,7 +414,7 @@ function hydrateMeeting(row: StoredMeeting): Meeting {
   const { extractedActionsJson, correctionsJson, summaryJson, summaryEmailRecipientsJson, ...meeting } = row;
   let extractedActions: DetectedAction[] = [];
   let corrections: TranscriptCorrection[] = [];
-  let summary: MeetingSummary = { decisions: [], risks: [], important_points: [], follow_ups: [] };
+  let summary: MeetingSummary = { overview: "", decisions: [], risks: [], important_points: [], follow_ups: [] };
   let summaryEmailRecipients: string[] = [];
   try {
     const parsed = JSON.parse(extractedActionsJson);
@@ -426,6 +427,7 @@ function hydrateMeeting(row: StoredMeeting): Meeting {
   try {
     const parsed = JSON.parse(summaryJson) as Partial<MeetingSummary>;
     summary = {
+      overview: typeof parsed.overview === "string" ? parsed.overview : "",
       decisions: Array.isArray(parsed.decisions) ? parsed.decisions : [],
       risks: Array.isArray(parsed.risks) ? parsed.risks : [],
       important_points: Array.isArray(parsed.important_points) ? parsed.important_points : [],

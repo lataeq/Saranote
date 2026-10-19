@@ -25,8 +25,8 @@ function escapeHtml(value: string): string {
 
 export async function GET(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Unauthorized." }, { status: 401 });
-  const mailbox = getSetting("pilot_email_sink") || process.env.SARANOTE_PILOT_EMAIL_SINK;
-  if (!mailbox) return Response.json({ error: "Controlled pilot mailbox is not configured." }, { status: 503 });
+  const mailbox = getSetting("notification_email") || process.env.SARANOTE_NOTIFICATION_EMAIL;
+  if (!mailbox) return Response.json({ error: "Notification mailbox is not configured." }, { status: 503 });
 
   const expired = applyRetentionPolicy();
   await Promise.all(expired.storedNames.map((storedName) => unlink(path.join(uploadsDirectory, storedName)).catch(() => undefined)));

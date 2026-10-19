@@ -21,7 +21,7 @@ class MeetingSummaryTest(unittest.TestCase):
 
     def test_does_not_invent_missing_categories(self):
         summary = extract_meeting_summary([{"text": "กล่าวเปิดประชุม"}], [])
-        self.assertEqual(summary, {"decisions": [], "risks": [], "important_points": [], "follow_ups": []})
+        self.assertEqual(summary, {"overview": "", "decisions": [], "risks": [], "important_points": [], "follow_ups": []})
 
 
 if __name__ == "__main__":
